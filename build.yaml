@@ -1,0 +1,9 @@
+targets:
+  $default:
+    builders:
+      riverpod_generator:
+        enabled: true
+      drift_dev:
+        enabled: true
+      source_gen:combining_builder:
+        enabled: true

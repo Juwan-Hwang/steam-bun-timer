@@ -1,0 +1,40 @@
+# Flutter
+build/
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+*.lock
+!pubspec.lock
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.atom/
+.DS_Store
+
+# Android
+android/.gradle/
+android/captures/
+android/gradlew
+android/gradlew.bat
+android/local.properties
+android/key.properties
+**/android/**/gradle-wrapper.jar
+*.jks
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Runner/GeneratedPluginRegistrant.*
+
+# Reference repos (not part of project)
+zephyr_ref/
+
+# Design docs are tracked, but temp files:
+*.tmp
+*.bak
