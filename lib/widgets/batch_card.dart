@@ -473,6 +473,9 @@ class _BatchCardState extends State<BatchCard>
   // ── 操作按钮 ≥72dp ──
   bool _shouldShowAction(StepRuntime? s) {
     if (s == null) return false;
+    // R4: 当前步骤就是并行步骤时，不显示主按钮 — 只显示并行按钮
+    final parallel = widget.batch.parallelStep;
+    if (parallel != null && parallel.node.type == s.node.type) return false;
     // 仅在需要用户操作时显示按钮：
     //   awaitingConfirmation → 首次确认（开始倒计时）
     //   done → 完成确认（推进下一步）

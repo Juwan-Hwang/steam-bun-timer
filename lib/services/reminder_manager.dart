@@ -64,7 +64,8 @@ class ReminderManager {
       // 仅当新请求优先级严格更低时才丢弃
       // 同级或更高 → 替换（多锅同时到点不丢提醒）
       if (request.level.index > _activeReminder!.level.index) return;
-      stop();
+      // await 内部停止 — 防止 stop() 的 setAnnouncing(false) 覆盖新请求的 setAnnouncing(true)（R2 修复）
+      await _stopInternal();
     }
 
     _activeReminder = request;
@@ -93,17 +94,22 @@ class ReminderManager {
     // simmeringHint 只播语音，不加铃声/振动
   }
 
-  /// 停止所有提醒
-  Future<void> stop() async {
+  /// 内部停止 — 不触发 onReminderStop / setAnnouncing(false)
+  /// 用于 start() 替换场景，避免回调竞态（R2 修复）
+  Future<void> _stopInternal() async {
     _loopTimer?.cancel();
     _loopTimer = null;
     try { await _alarmPlayer.stop(); } catch (_) {}
     await AnnouncementPlayer.instance.stop();
-    // 取消精确闹钟兜底 — 防止幽灵通知（B3 修复）
     if (_activeReminder != null) {
       ForegroundTaskHandler.instance.cancelExactAlarm(_activeReminder!.batchNumber);
     }
     _activeReminder = null;
+  }
+
+  /// 停止所有提醒
+  Future<void> stop() async {
+    await _stopInternal();
     // 恢复语音识别
     VoiceCommandService.instance.setAnnouncing(false);
     onReminderStop?.call();

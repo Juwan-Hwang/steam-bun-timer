@@ -4,6 +4,7 @@
 library;
 
 import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../data/database.dart';
 import '../models/batch.dart';
 import '../models/recipe.dart';
@@ -23,6 +24,9 @@ class ActiveBatchStorage {
       'INSERT OR REPLACE INTO active_batch_kv (id, data) VALUES (?, ?)',
       [batch.id, json],
     );
+    // 同步 SharedPreferences 标志 — BootReceiver 据此决定是否启动前台服务（R3 修复）
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('has_active', true);
   }
 
   /// 删除活跃批次（完成后）
@@ -31,6 +35,12 @@ class ActiveBatchStorage {
       'DELETE FROM active_batch_kv WHERE id = ?',
       [batchId],
     );
+    // 如果已无活跃批次，清除标志
+    final remaining = await loadAllBatches();
+    if (remaining.isEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('has_active', false);
+    }
   }
 
   /// 加载所有活跃批次（用于崩溃恢复）

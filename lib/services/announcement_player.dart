@@ -110,7 +110,8 @@ class AnnouncementPlayer {
   /// stop() 标志 — 防止 stop 后仍触发 TTS 兜底或补播
   bool _stopped = false;
 
-  /// 代际计数器 — 每次 play() 递增，_processQueue 检查代际防并发竞态（I13 修复）
+  /// 代际计数器 — 仅在实际启动新队列时递增（play() 早返回时不递增），
+  /// 防止「播放中 play()」使旧 _processQueue 代际失效导致 _isPlaying 永久卡死（R1 修复）
   int _generation = 0;
 
   /// 播放一条完整的播报
@@ -119,10 +120,11 @@ class AnnouncementPlayer {
   /// 避免新请求的分段与当前队列混排，且防止 _processQueue 结束时
   /// 补播已经入队并消费过的请求导致重复播报。
   Future<void> play(AnnouncementRequest req) async {
-    _generation++;
     _stopped = false;
     _latestReq = req;
     if (_isPlaying) return; // 正在播放 → 仅记录最新请求，待当前队列播完后补播
+
+    _generation++; // 仅在实际启动新队列时递增
 
     final segments = <String>[];
     final n = AnnouncementCatalog.getNumber(req.number);
@@ -159,16 +161,22 @@ class AnnouncementPlayer {
       }
     }
 
-    if (_generation == myGen) {
-      _isPlaying = false;
+    // 无条件复位 _isPlaying — 不门控代际，防止死锁（R1 修复）
+    _isPlaying = false;
+
+    if (_stopped) {
+      _latestReq = null;
+      return;
     }
 
     // 播放期间如果有新的 play() 被跳过，补播最新的请求
-    if (!_stopped && _generation == myGen && _latestReq != null && _latestReq != req) {
+    // 代际不同 → 新 play() 已递增代际但 _isPlaying=true 导致早返回 → 需要补播
+    // 代际相同 → 正常播完，检查是否有更晚的请求
+    if (_latestReq != null && _latestReq != req) {
       final pending = _latestReq!;
       _latestReq = null;
       await play(pending);
-    } else if (_generation == myGen) {
+    } else {
       _latestReq = null;
     }
   }
@@ -177,12 +185,11 @@ class AnnouncementPlayer {
   /// 用 Completer + 独立订阅避免 Future.any 捕获上一段遗留的 stopped 状态
   Future<bool> _playAudioSegment(String asset) async {
     try {
-      await _audioPlayer.play(AssetSource('audio/$asset'));
-
       final completer = Completer<bool>();
       late StreamSubscription completeSub;
       late StreamSubscription stateSub;
 
+      // 订阅必须在 play() 之前 — 极短音频可能在 play() 返回前就完成
       completeSub = _audioPlayer.onPlayerComplete.listen((_) {
         if (!completer.isCompleted) completer.complete(true);
       });
@@ -191,6 +198,8 @@ class AnnouncementPlayer {
           completer.complete(false);
         }
       });
+
+      await _audioPlayer.play(AssetSource('audio/$asset'));
 
       final timer = Timer(const Duration(seconds: 5), () {
         if (!completer.isCompleted) completer.complete(false);

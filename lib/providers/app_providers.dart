@@ -147,6 +147,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   ActiveBatchesNotifier(this.ref) : super([]) {
     // 每秒检查所有批次状态
     _checkTimer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    // R5: stop() 后扫描其他批次待提醒步骤并恢复
+    ReminderManager.instance.onReminderStop = _checkPendingReminders;
   }
 
   @override
@@ -387,6 +389,11 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     } else if (current.status == StepStatus.done) {
       // 倒计时已结束 → 确认完成并推进
       current.actualConfirm = DateTime.now();
+      // 清理 parallelStep — 如果当前步骤就是并行步骤（烧水交接后），
+      // 走主按钮 confirmCurrentStep 时也必须清理，防止悬垂引用（R4 修复）
+      if (batch.parallelStep != null && batch.parallelStep!.node.type == current.node.type) {
+        batch.parallelStep = null;
+      }
       _advanceToNext(batch, idx);
     }
     // running / evaluating / extending / simmering → 不响应
@@ -712,6 +719,59 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     final active = state.where((b) => b.status == BatchStatus.active).toList();
     if (active.isEmpty) {
       ForegroundTaskHandler.instance.stopForegroundService();
+    }
+  }
+
+  /// R5: stop() 后扫描其他批次是否有待提醒步骤
+  /// 多锅场景下 B 替换 A 后，A 的提醒被中断 — 确认 B 后自动恢复 A
+  void _checkPendingReminders() {
+    if (state.isEmpty) return;
+    if (ReminderManager.instance.isReminding) return;
+
+    // 扫描所有批次，找到第一个有待提醒步骤的
+    for (final batch in state) {
+      if (batch.status != BatchStatus.active) continue;
+
+      // 检查并行步骤
+      final parallel = batch.parallelStep;
+      if (parallel != null &&
+          parallel.reminderSentAt != null &&
+          (parallel.status == StepStatus.done ||
+           parallel.status == StepStatus.awaitingConfirmation)) {
+        _triggerReminder(batch, parallel.status == StepStatus.done ? '该上锅了' : '该烧水了');
+        return;
+      }
+
+      // 检查当前步骤
+      final step = batch.currentStep;
+      if (step == null || step.reminderSentAt == null) continue;
+      if (step.status == StepStatus.evaluating) {
+        _triggerReminder(batch, '发酵好了');
+        return;
+      }
+      if (step.status == StepStatus.done) {
+        _triggerReminder(batch, _actionTextForStep(step));
+        return;
+      }
+    }
+  }
+
+  /// 根据步骤类型推导提醒文案
+  String _actionTextForStep(StepRuntime step) {
+    switch (step.node.type) {
+      case StepType.fermentation:
+        return '发酵好了';
+      case StepType.boiling:
+        return '该上锅了';
+      case StepType.steaming:
+        return '该关火了';
+      case StepType.simmering:
+      case StepType.uncover:
+        return '该揭锅了';
+      case StepType.flipping:
+        return '该翻面了';
+      case StepType.plateOut:
+        return '该出锅了';
     }
   }
 
