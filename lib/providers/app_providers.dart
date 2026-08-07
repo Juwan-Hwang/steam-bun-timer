@@ -288,6 +288,32 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     return batch;
   }
 
+  /// 确认并行工序（如烧水）— P0-3
+  /// 「该烧水了」→ awaitingConfirmation 转 running
+  /// 「该上锅了」→ 烧水已完成，清理并行引用
+  void confirmParallelStep(String batchId) {
+    final idx = state.indexWhere((b) => b.id == batchId);
+    if (idx == -1) return;
+    final batch = state[idx];
+    final parallel = batch.parallelStep;
+    if (parallel == null) return;
+
+    ReminderManager.instance.stop();
+
+    if (parallel.status == StepStatus.awaitingConfirmation) {
+      // 「该烧水了」→ 开始烧水
+      parallel.status = StepStatus.running;
+      // actualStart 已在 _triggerParallelBoiling 中设置
+    } else if (parallel.status == StepStatus.done) {
+      // 「该上锅了」→ 烧水已完成，清理并行引用
+      // 实际推进到下一步会在发酵评价后由 _advanceToNext 处理
+      batch.parallelStep = null;
+    }
+
+    state = List.of(state);
+    _persistBatch(batch);
+  }
+
   /// 确认当前工序动作节点
   void confirmCurrentStep(String batchId) {
     final idx = state.indexWhere((b) => b.id == batchId);
@@ -484,6 +510,12 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       batch.currentStepIndex++;
       final next = batch.currentStep!;
 
+      // P0-2: 如果该步骤已通过并行完成（status == done），直接跳过
+      if (next.status == StepStatus.done) {
+        _advanceToNext(batch, idx);
+        return;
+      }
+
       // 如果该步骤已作为并行步骤启动（如烧水在发酵尾部已并行），
       // 不重置已有时间戳，直接切换为 running 状态
       if (next.actualStart != null &&
@@ -628,14 +660,19 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   }
 
   /// 异步获取天气 — §4.5
+  /// 后台静默执行：任何失败都不影响 UI，温度记为 null
   Future<void> _fetchWeather(String batchId) async {
-    final data = await WeatherService.instance.fetchCurrentWeather();
-    if (data == null) return;
-    final idx = state.indexWhere((b) => b.id == batchId);
-    if (idx == -1) return;
-    state[idx].temperature = data.temperature;
-    state[idx].humidity = data.humidity;
-    state = List.of(state);
+    try {
+      final data = await WeatherService.instance.fetchCurrentWeather();
+      final idx = state.indexWhere((b) => b.id == batchId);
+      if (idx == -1 || data == null) return;
+      // 静默更新温度，不触发额外 UI 抖动
+      state[idx].temperature = data.temperature;
+      state[idx].humidity = data.humidity;
+      state = List.of(state);
+    } catch (_) {
+      // 宁缺数据，不丢数据 — 温度保持 null
+    }
   }
 
   /// 批次完成时入库 — §4.2

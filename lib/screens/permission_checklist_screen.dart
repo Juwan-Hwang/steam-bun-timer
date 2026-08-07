@@ -20,6 +20,7 @@ class _PermissionChecklistScreenState extends State<PermissionChecklistScreen> {
   bool _exactAlarms = false;
   bool _batteryOpt = false;
   bool _location = false;
+  bool _microphone = false;
   final bool _boot = true;
 
   @override
@@ -54,12 +55,17 @@ class _PermissionChecklistScreenState extends State<PermissionChecklistScreen> {
       }
     }
 
+    // P1-1: 检查录音权限（语音指令）
+    final micStatus = await Permission.microphone.status;
+    final micGranted = micStatus.isGranted;
+
     if (mounted) {
       setState(() {
         _notifications = notif;
         _exactAlarms = alarms;
         _batteryOpt = battery;
         _location = locGranted;
+        _microphone = micGranted;
       });
     }
   }
@@ -117,6 +123,12 @@ class _PermissionChecklistScreenState extends State<PermissionChecklistScreen> {
                 if (!context.mounted) return;
                 setState(() => _location = false);
               }
+            }),
+            // P1-1: 录音权限（语音指令）
+            _card(z, '录音权限', '语音指令识别需要麦克风权限', '授权', _microphone, () async {
+              final status = await Permission.microphone.request();
+              if (!context.mounted) return;
+              setState(() => _microphone = status.isGranted);
             }),
             _card(z, '自启动权限', '厂商 ROM 需加入白名单，开机后自动启动', '已就绪', _boot, () {
               // 厂商自启动设置页面跳转 — 不同厂商路径不同，此处仅提示

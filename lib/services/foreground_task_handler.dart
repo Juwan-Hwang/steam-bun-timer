@@ -133,4 +133,12 @@ class ForegroundTaskHandler {
       await _channel.invokeMethod('requestIgnoreBatteryOptimizations');
     } catch (_) {}
   }
+
+  /// P3-1: 设置屏幕亮度 — 真正调用 WindowManager
+  /// brightness: 0.0~1.0 自定义亮度，-1 恢复系统亮度
+  Future<void> setBrightness(double brightness) async {
+    try {
+      await _channel.invokeMethod('setBrightness', {'brightness': brightness});
+    } catch (_) {}
+  }
 }

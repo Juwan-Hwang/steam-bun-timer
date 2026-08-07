@@ -147,13 +147,25 @@ class AnnouncementPlayer {
   }
 
   /// 播放单个音频分段，返回是否成功
+  /// P2-3: 用 onPlayerComplete + onPlayerStateChanged + 超时三路竞速
+  /// 避免录音缺失时 onPlayerComplete 永不触发导致 _isPlaying 永久卡死
   Future<bool> _playAudioSegment(String asset) async {
     try {
       await _audioPlayer.play(AssetSource('audio/$asset'));
-      await _audioPlayer.onPlayerComplete.first;
-      return true;
+      // 竞速等待：
+      //   onPlayerComplete → 成功
+      //   onPlayerStateChanged 回到 stopped → 失败（文件缺失/播放错误）
+      //   3 秒超时 → 失败
+      final result = await Future.any([
+        _audioPlayer.onPlayerComplete.first.then((_) => true),
+        _audioPlayer.onPlayerStateChanged
+            .where((s) => s == PlayerState.stopped)
+            .first
+            .then((_) => false),
+        Future<bool>.delayed(const Duration(seconds: 3), () => false),
+      ]);
+      return result;
     } catch (_) {
-      // 音频文件不存在或播放失败
       return false;
     }
   }

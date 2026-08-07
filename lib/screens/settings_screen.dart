@@ -1,4 +1,6 @@
 /// 设置页面 — V1+V2 全设置项连接
+/// P3-1: 充电保护从假开关改为系统设置导航
+/// P-天气: 天气 API 详细教学 + 测试按钮 + 定位权限引导
 library;
 
 import 'package:flutter/material.dart';
@@ -6,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_tokens.dart';
 import '../providers/app_providers.dart';
 import '../services/weather_service.dart';
+import '../services/foreground_task_handler.dart';
 import 'permission_checklist_screen.dart';
 import 'data_export_screen.dart';
 
@@ -38,7 +41,7 @@ class SettingsScreen extends ConsumerWidget {
             _section(z, '屏幕与保活'),
             _switch(z, '屏幕常亮', '做馒头期间屏幕不锁屏', settings.screenAlwaysOn,
                 () => ref.read(settingsProvider.notifier).toggleScreenAlwaysOn()),
-            _switch(z, '自动降低亮度', '常亮时自动降低亮度防过热', settings.autoDimBrightness,
+            _switch(z, '自动降低亮度', '常亮时自动降到 15% 亮度防过热', settings.autoDimBrightness,
                 () => ref.read(settingsProvider.notifier).toggleAutoDim()),
             _switch(z, '防烧屏', '倒计时数字每分钟微移几个像素', settings.burnInProtection,
                 () => ref.read(settingsProvider.notifier).toggleBurnInProtection()),
@@ -50,23 +53,25 @@ class SettingsScreen extends ConsumerWidget {
 
             const SizedBox(height: ZephyrSpacing.s6),
             _section(z, '电池'),
-            _switch(z, '充电保护', '充电上限 80%（部分机型自带）', settings.chargingProtection,
-                () => ref.read(settingsProvider.notifier).toggleChargingProtection()),
+            // P3-1: 充电保护从假开关改为系统设置导航
+            _nav(z, '充电保护', '部分机型自带充电上限设置，点击跳转系统电池设置', Icons.battery_charging_full, () {
+              ForegroundTaskHandler.instance.requestIgnoreBatteryOptimizations();
+            }),
 
             const SizedBox(height: ZephyrSpacing.s6),
             _section(z, 'V2 免触增强'),
-            _switch(z, '语音指令', '四川话关键词识别（开始烧水/好了/加两分钟）', settings.voiceEnabled,
+            _switch(z, '语音指令', '中文关键词识别（开始烧水/好了/加两分钟）', settings.voiceEnabled,
                 () => ref.read(settingsProvider.notifier).toggleVoiceEnabled()),
 
             const SizedBox(height: ZephyrSpacing.s6),
             _section(z, '天气'),
             _nav(z, '和风天气 API Key', '配置后自动采集气温数据', Icons.cloud_outlined, () {
-              _showApiKeyDialog(context, z, ref);
+              _showWeatherConfigSheet(context, z, ref);
             }),
 
             const SizedBox(height: ZephyrSpacing.s6),
             _section(z, '系统权限'),
-            _nav(z, '权限检查清单', '通知、精确闹钟、电池优化等', Icons.checklist, () {
+            _nav(z, '权限检查清单', '通知、精确闹钟、电池优化、定位等', Icons.checklist, () {
               Navigator.push(context, MaterialPageRoute(builder: (_) => const PermissionChecklistScreen()));
             }),
 
@@ -78,7 +83,7 @@ class SettingsScreen extends ConsumerWidget {
 
             const SizedBox(height: ZephyrSpacing.s6),
             _section(z, '关于'),
-            _info(z, '版本', '1.1.0 (V1+V2 审计修复)'),
+            _info(z, '版本', '1.2.0 (P0-P3 审计修复)'),
             _info(z, '技术栈', 'Flutter 3.x + Drift + Riverpod'),
           ],
         ),
@@ -177,51 +182,190 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  /// 和风天气 API Key 配置对话框
-  void _showApiKeyDialog(BuildContext context, ZephyrSemantic z, WidgetRef ref) {
-    final controller = TextEditingController();
+  /// P-天气: 和风天气 API 配置面板 — 教学 + API Key/Host 双输入 + 测试
+  void _showWeatherConfigSheet(BuildContext context, ZephyrSemantic z, WidgetRef ref) {
+    final keyController = TextEditingController();
+    final hostController = TextEditingController();
+    bool isTesting = false;
+    String? testMessage;
+
     WeatherService.instance.getApiKey().then((key) {
-      controller.text = key ?? '';
+      keyController.text = key ?? '';
+    });
+    WeatherService.instance.getApiHost().then((host) {
+      hostController.text = host ?? '';
     });
 
-    showDialog(
+    showModalBottomSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: z.bgElevated,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ZephyrRadius.overlay)),
-        title: Text('和风天气 API Key', style: TextStyle(color: z.textPrimary, fontWeight: FontWeight.w600)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('在 dev.qweather.com 注册后获取 API Key，配置后发酵时自动采集气温。',
-                style: TextStyle(fontSize: 12, color: z.textSecondary)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller,
-              decoration: InputDecoration(
-                hintText: '输入 API Key',
-                hintStyle: TextStyle(color: z.textTertiary, fontSize: 14),
-                filled: true,
-                fillColor: z.bgMuted,
-                border: OutlineInputBorder(
+      isScrollControlled: true,
+      backgroundColor: z.bgElevated,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(ZephyrRadius.overlay))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => Padding(
+          padding: EdgeInsets.only(
+            left: ZephyrSpacing.s5, right: ZephyrSpacing.s5, top: ZephyrSpacing.s5,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + ZephyrSpacing.s5,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 标题
+              Row(
+                children: [
+                  Icon(Icons.cloud_outlined, size: 24, color: z.accentPrimary),
+                  const SizedBox(width: 8),
+                  Text('和风天气 API 配置', style: TextStyle(fontSize: ZephyrFontSize.xl, fontWeight: FontWeight.w600, color: z.textPrimary)),
+                ],
+              ),
+              const SizedBox(height: ZephyrSpacing.s4),
+
+              // 教学步骤
+              Container(
+                padding: const EdgeInsets.all(ZephyrSpacing.s4),
+                decoration: BoxDecoration(
+                  color: z.bgMuted,
                   borderRadius: BorderRadius.circular(ZephyrRadius.md),
-                  borderSide: BorderSide.none,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('获取步骤', style: TextStyle(fontSize: ZephyrFontSize.sm, fontWeight: FontWeight.w700, color: z.textSecondary)),
+                    const SizedBox(height: 8),
+                    _stepRow(z, '1', 'console.qweather.com 注册 → 创建项目（免费开发版）'),
+                    _stepRow(z, '2', '项目里「添加凭据」→ 选 API KEY → 复制 Key'),
+                    _stepRow(z, '3', '控制台「设置」页复制 API Host（独立域名）'),
+                    _stepRow(z, '4', '两个值都粘贴到下方，点击测试'),
+                    const SizedBox(height: 8),
+                    Text('免费版每天 1000 次调用，天气数据不产生费用', style: TextStyle(fontSize: 10, color: z.textTertiary)),
+                  ],
                 ),
               ),
-              style: TextStyle(color: z.textPrimary, fontSize: 14),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          TextButton(
-            onPressed: () async {
-              await WeatherService.instance.setApiKey(controller.text.trim());
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: Text('保存', style: TextStyle(color: z.accentPrimary, fontWeight: FontWeight.w700)),
+              const SizedBox(height: ZephyrSpacing.s4),
+
+              // API Key 输入框
+              Text('API Key', style: TextStyle(fontSize: ZephyrFontSize.xs, fontWeight: FontWeight.w700, color: z.textSecondary)),
+              const SizedBox(height: 4),
+              TextField(
+                controller: keyController,
+                decoration: InputDecoration(
+                  hintText: '32 位字符，如 ABCD1234EFGH...',
+                  hintStyle: TextStyle(color: z.textTertiary, fontSize: 13),
+                  filled: true,
+                  fillColor: z.bgMuted,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(ZephyrRadius.md),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                style: TextStyle(color: z.textPrimary, fontSize: 14),
+              ),
+              const SizedBox(height: ZephyrSpacing.s3),
+
+              // API Host 输入框
+              Text('API Host', style: TextStyle(fontSize: ZephyrFontSize.xs, fontWeight: FontWeight.w700, color: z.textSecondary)),
+              const SizedBox(height: 4),
+              TextField(
+                controller: hostController,
+                decoration: InputDecoration(
+                  hintText: '如 abc123xyz.def.qweatherapi.com',
+                  hintStyle: TextStyle(color: z.textTertiary, fontSize: 13),
+                  filled: true,
+                  fillColor: z.bgMuted,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(ZephyrRadius.md),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                style: TextStyle(color: z.textPrimary, fontSize: 14),
+              ),
+              const SizedBox(height: ZephyrSpacing.s3),
+
+              // 测试结果
+              if (testMessage != null)
+                Container(
+                  padding: const EdgeInsets.all(ZephyrSpacing.s3),
+                  decoration: BoxDecoration(
+                    color: testMessage!.startsWith('连接成功')
+                        ? z.success.withValues(alpha: 0.08)
+                        : z.danger.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(ZephyrRadius.md),
+                  ),
+                  child: Text(testMessage!, style: TextStyle(fontSize: 12, color: testMessage!.startsWith('连接成功') ? z.success : z.danger)),
+                ),
+
+              // 按钮
+              const SizedBox(height: ZephyrSpacing.s4),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('取消'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // 测试按钮
+                  ElevatedButton(
+                    onPressed: isTesting ? null : () async {
+                      setState(() { isTesting = true; testMessage = null; });
+                      await WeatherService.instance.setApiKey(keyController.text.trim());
+                      await WeatherService.instance.setApiHost(hostController.text.trim());
+                      final result = await WeatherService.instance.testApiKey();
+                      setState(() {
+                        isTesting = false;
+                        testMessage = result.message;
+                      });
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: z.bgMuted,
+                      foregroundColor: z.textPrimary,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ZephyrRadius.md)),
+                    ),
+                    child: isTesting
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Text('测试'),
+                  ),
+                  const SizedBox(width: 8),
+                  // 保存按钮
+                  ElevatedButton(
+                    onPressed: () async {
+                      await WeatherService.instance.setApiKey(keyController.text.trim());
+                      await WeatherService.instance.setApiHost(hostController.text.trim());
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: z.accentPrimary,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ZephyrRadius.md)),
+                    ),
+                    child: const Text('保存', style: TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              ),
+            ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _stepRow(ZephyrSemantic z, String num, String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 20, height: 20,
+            decoration: BoxDecoration(color: z.accentPrimary.withValues(alpha: 0.15), shape: BoxShape.circle),
+            child: Center(child: Text(num, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: z.accentPrimary))),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: TextStyle(fontSize: 12, color: z.textSecondary))),
         ],
       ),
     );

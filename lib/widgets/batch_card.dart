@@ -17,6 +17,7 @@ enum CardUrgency { calm, approaching, urgent, done }
 class BatchCard extends StatefulWidget {
   final Batch batch;
   final VoidCallback? onConfirm;
+  final VoidCallback? onConfirmParallel; // P0-3: 并行烧水步骤确认
   final VoidCallback? onCancel;
   final void Function(FermentationResult)? onEvaluate;
   final void Function(int)? onAdjustDuration;
@@ -29,6 +30,7 @@ class BatchCard extends StatefulWidget {
     super.key,
     required this.batch,
     this.onConfirm,
+    this.onConfirmParallel,
     this.onCancel,
     this.onEvaluate,
     this.onAdjustDuration,
@@ -136,6 +138,11 @@ class _BatchCardState extends State<BatchCard>
             if (_shouldShowAction(s)) ...[
               const SizedBox(height: ZephyrSpacing.s3),
               _actionButton(z, accent, s!),
+            ],
+            // P0-3: 并行烧水步骤需要确认时显示按钮
+            if (_shouldShowParallelAction()) ...[
+              const SizedBox(height: ZephyrSpacing.s3),
+              _parallelActionButton(z),
             ],
             if (b.isCompleted && b.recipe.id == 'flatbread') ...[
               const SizedBox(height: ZephyrSpacing.s3),
@@ -464,6 +471,39 @@ class _BatchCardState extends State<BatchCard>
     return s.status == StepStatus.awaitingConfirmation ||
            s.status == StepStatus.running ||
            s.status == StepStatus.simmering;
+  }
+
+  /// P0-3: 并行烧水步骤是否需要显示确认按钮
+  bool _shouldShowParallelAction() {
+    final parallel = widget.batch.parallelStep;
+    if (parallel == null) return false;
+    return parallel.status == StepStatus.awaitingConfirmation ||
+           parallel.status == StepStatus.done;
+  }
+
+  /// P0-3: 并行烧水确认按钮
+  Widget _parallelActionButton(ZephyrSemantic z) {
+    final parallel = widget.batch.parallelStep!;
+    final label = parallel.status == StepStatus.awaitingConfirmation
+        ? '已开始烧水'
+        : '已上锅';
+    final color = parallel.status == StepStatus.awaitingConfirmation
+        ? z.warning
+        : z.danger;
+    return SizedBox(
+      width: double.infinity,
+      height: 72,
+      child: ElevatedButton(
+        onPressed: widget.onConfirmParallel,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ZephyrRadius.overlay)),
+        ),
+        child: Text(label, style: const TextStyle(fontSize: ZephyrFontSize.lg, fontWeight: FontWeight.w700)),
+      ),
+    );
   }
 
   Widget _actionButton(ZephyrSemantic z, Color accent, StepRuntime s) {

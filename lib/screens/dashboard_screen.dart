@@ -47,6 +47,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   }
 
   /// 触发源回调 — 确认当前最紧急的批次
+  ///
+  /// P0-1: 发酵评价状态下，音量键 = 默认「正好」而非跳过评价
+  /// P0-3: 并行期间根据提醒文案确认正确目标（发酵 vs 并行烧水）
   void _handleTrigger() {
     // 始终先清除全屏提醒覆盖层
     ref.read(activeReminderProvider.notifier).state = null;
@@ -57,27 +60,59 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       return;
     }
 
-    // 如果有活跃提醒，先停止铃声
+    final sorted = _sortByUrgency(batches);
+    final mostUrgent = sorted.first;
+
+    // 捕获当前活跃提醒的文案（stop 后会清空）
+    final activeReminder = ReminderManager.instance.activeReminder;
+    final actionText = activeReminder?.actionText;
+
     if (ReminderManager.instance.isReminding) {
       ReminderManager.instance.stop().then((_) {
-        // 停止后确认最紧急批次的当前工序
-        final sorted = _sortByUrgency(batches);
-        final mostUrgent = sorted.first;
-        final step = mostUrgent.currentStep;
-        if (step != null && (step.status == StepStatus.awaitingConfirmation ||
-            step.status == StepStatus.evaluating)) {
-          ref.read(activeBatchesProvider.notifier).confirmCurrentStep(mostUrgent.id);
-        }
+        _confirmBasedOnContext(mostUrgent, actionText);
       });
       return;
     }
 
     // 没有活跃提醒时，确认当前工序
-    final sorted = _sortByUrgency(batches);
-    final mostUrgent = sorted.first;
-    final step = mostUrgent.currentStep;
-    if (step != null && step.node.requiresConfirmation) {
-      ref.read(activeBatchesProvider.notifier).confirmCurrentStep(mostUrgent.id);
+    _confirmBasedOnContext(mostUrgent, null);
+  }
+
+  /// 根据上下文确认正确的工序
+  void _confirmBasedOnContext(Batch batch, String? reminderAction) {
+    final step = batch.currentStep;
+    if (step == null) return;
+
+    // P0-1: 发酵评价状态 → 音量键默认「正好」
+    if (step.status == StepStatus.evaluating) {
+      ref.read(activeBatchesProvider.notifier)
+          .evaluateFermentation(batch.id, FermentationResult.perfect);
+      return;
+    }
+
+    // P0-3: 并行期间，根据提醒文案确认正确的目标工序
+    final parallel = batch.parallelStep;
+    if (parallel != null && reminderAction != null) {
+      // 「该烧水了」→ 确认并行烧水步骤（从 awaitingConfirmation → running）
+      if (reminderAction == '该烧水了' &&
+          parallel.status == StepStatus.awaitingConfirmation) {
+        ref.read(activeBatchesProvider.notifier)
+            .confirmParallelStep(batch.id);
+        return;
+      }
+      // 「该上锅了」→ 烧水已完成，确认并行步骤并清理
+      if (reminderAction == '该上锅了' &&
+          parallel.status == StepStatus.done) {
+        ref.read(activeBatchesProvider.notifier)
+            .confirmParallelStep(batch.id);
+        return;
+      }
+    }
+
+    // 默认：确认当前工序（仅当需要确认时）
+    if (step.status == StepStatus.awaitingConfirmation ||
+        (step.node.requiresConfirmation && step.status == StepStatus.running)) {
+      ref.read(activeBatchesProvider.notifier).confirmCurrentStep(batch.id);
     }
   }
 
@@ -90,10 +125,15 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     switch (cmd) {
       case VoiceCommand.startBoiling:
-        // 确认烧水节点
-        final step = target.currentStep;
-        if (step?.node.type == StepType.boiling) {
-          ref.read(activeBatchesProvider.notifier).confirmCurrentStep(target.id);
+        // 确认烧水节点 — 优先并行步骤
+        final parallel = target.parallelStep;
+        if (parallel != null && parallel.status == StepStatus.awaitingConfirmation) {
+          ref.read(activeBatchesProvider.notifier).confirmParallelStep(target.id);
+        } else {
+          final step = target.currentStep;
+          if (step?.node.type == StepType.boiling) {
+            ref.read(activeBatchesProvider.notifier).confirmCurrentStep(target.id);
+          }
         }
       case VoiceCommand.startSteaming:
         final step = target.currentStep;
@@ -101,7 +141,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           ref.read(activeBatchesProvider.notifier).confirmCurrentStep(target.id);
         }
       case VoiceCommand.done:
-        ref.read(activeBatchesProvider.notifier).confirmCurrentStep(target.id);
+        // 复用上下文确认逻辑 — 评价状态默认「正好」
+        _confirmBasedOnContext(target, null);
       case VoiceCommand.addTwoMinutes:
         ref.read(activeBatchesProvider.notifier).adjustDuration(target.id, 2);
     }
@@ -195,6 +236,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               child: BatchCard(
                 batch: b,
                 onConfirm: () => ref.read(activeBatchesProvider.notifier).confirmCurrentStep(b.id),
+                onConfirmParallel: () => ref.read(activeBatchesProvider.notifier).confirmParallelStep(b.id),
                 onEvaluate: (result) => ref.read(activeBatchesProvider.notifier).evaluateFermentation(b.id, result),
                 onAdjustDuration: (delta) => ref.read(activeBatchesProvider.notifier).adjustDuration(b.id, delta),
                 onExtendFermentation: (mins) => ref.read(activeBatchesProvider.notifier).extendFermentation(b.id, mins),

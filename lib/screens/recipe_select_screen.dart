@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_tokens.dart';
 import '../models/recipe.dart';
 import '../providers/app_providers.dart';
+import '../services/weather_service.dart';
 import 'dashboard_screen.dart';
 
 class RecipeSelectScreen extends ConsumerStatefulWidget {
@@ -26,12 +27,14 @@ class _RecipeSelectScreenState extends ConsumerState<RecipeSelectScreen> {
   }
 
   Future<void> _loadHabitDefaults() async {
+    // P2-2: 获取真实气温而非硬编码 25°C
+    final weather = await WeatherService.instance.fetchCurrentWeather();
+    final temp = weather?.temperature;
     for (final r in Recipe.presets) {
-      final temp = 25.0; // TODO: 获取实时气温
       final habit = await ref.read(activeBatchesProvider.notifier).getHabitDefaultMinutes(r.id, temp);
       _habitDefaults[r.id] = habit;
     }
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   @override

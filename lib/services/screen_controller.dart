@@ -1,9 +1,11 @@
 /// 屏幕控制器 — §配套细节
 /// 屏幕常亮 / 自动降低亮度 / 防烧屏数字微移
+/// P3-1: 自动降低亮度真正调用 WindowManager，不再只存布尔
 library;
 
 import 'package:flutter/material.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'foreground_task_handler.dart';
 
 class ScreenController {
   ScreenController._();
@@ -38,9 +40,17 @@ class ScreenController {
     }
   }
 
-  /// 设置自动降低亮度
+  /// P3-1: 设置自动降低亮度 — 真正调用 WindowManager
+  /// 开启时亮度降到 0.15，关闭时恢复系统亮度
   void setAutoDim(bool enabled) {
     _autoDim = enabled;
+    if (enabled) {
+      // 降到 15% 亮度
+      ForegroundTaskHandler.instance.setBrightness(0.15);
+    } else {
+      // 恢复系统亮度
+      ForegroundTaskHandler.instance.setBrightness(-1.0);
+    }
   }
 
   /// 设置防烧屏

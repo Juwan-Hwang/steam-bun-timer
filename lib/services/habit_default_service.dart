@@ -6,12 +6,17 @@ library;
 import '../data/database.dart';
 import '../utils/season_util.dart';
 import 'package:drift/drift.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class HabitDefaultService {
   HabitDefaultService._();
   static final instance = HabitDefaultService._();
 
   final _db = AppDatabase();
+
+  /// P2-1: 生成习惯方向存储 key
+  String _directionKey(String recipeId, int tempLow, int tempHigh) =>
+      'habit_dir_${recipeId}_${tempLow}_$tempHigh';
 
   /// 记录一次调整行为
   /// recipeId: 品种 ID
@@ -31,6 +36,12 @@ class HabitDefaultService {
     // 查询现有记录
     final existing = await _db.getHabitDefault(recipeId, tempLow, tempHigh);
 
+    // P2-1: 读取上次调整方向
+    final prefs = await SharedPreferences.getInstance();
+    final dirKey = _directionKey(recipeId, tempLow, tempHigh);
+    final lastDirection = prefs.getInt(dirKey) ?? 0; // 1=加长, -1=缩短
+    final currentDirection = adjustmentMinutes > 0 ? 1 : -1;
+
     if (existing == null) {
       // 首次记录
       await _db.upsertHabitDefault(HabitDefaultsCompanion.insert(
@@ -41,11 +52,13 @@ class HabitDefaultService {
         consecutiveCount: const Value(1),
         updatedAt: DateTime.now(),
       ));
+      await prefs.setInt(dirKey, currentDirection);
       return;
     }
 
-    // 检查是否同方向且数值一致
-    final isSameDirection = _sameDirection(existing, adjustmentMinutes, finalMinutes);
+    // P2-1: 检查是否同方向且数值一致
+    final isSameDirection = _sameDirection(
+      lastDirection, currentDirection, existing.defaultMinutes, finalMinutes);
 
     if (isSameDirection) {
       final newCount = existing.consecutiveCount + 1;
@@ -80,6 +93,8 @@ class HabitDefaultService {
         updatedAt: Value(DateTime.now()),
       ));
     }
+    // P2-1: 保存当前方向
+    await prefs.setInt(dirKey, currentDirection);
   }
 
   /// 查询习惯默认值
@@ -100,10 +115,18 @@ class HabitDefaultService {
     return null;
   }
 
-  /// 检查是否同方向调整且数值一致
-  bool _sameDirection(HabitDefault existing, int newAdjustment, int newFinalMinutes) {
-    // 方向一致 = 之前也在加长（或缩短），这次也是
-    // 数值一致 = 最终设定的分钟数相同
-    return existing.defaultMinutes == newFinalMinutes;
+  /// P2-1: 检查是否同方向调整且数值一致
+  /// §3.2: 「同方向且数值一致连续 3 次」
+  /// lastDirection / currentDirection: 1=加长, -1=缩短
+  /// lastMinutes / newMinutes: 最终设定的发酵分钟数
+  bool _sameDirection(
+    int lastDirection, int currentDirection,
+    int lastMinutes, int newMinutes,
+  ) {
+    // 方向必须一致（同为加长或同为缩短）
+    if (lastDirection != currentDirection) return false;
+    // 数值必须一致（最终分钟数相同）
+    if (lastMinutes != newMinutes) return false;
+    return true;
   }
 }
