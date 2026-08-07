@@ -6,7 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -70,7 +70,13 @@ class TimerForegroundService : Service() {
         }
 
         // 关键：调用 startForeground() 提升为前台服务
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // Android 14+ (API 34) 声明了 foregroundServiceType 必须用三参重载
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
         return START_STICKY
     }
 

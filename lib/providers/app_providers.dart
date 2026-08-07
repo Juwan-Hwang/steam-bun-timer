@@ -184,6 +184,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         final remain = step.remainingSeconds;
         if (remain != null && remain <= 0) {
           step.status = StepStatus.evaluating;
+          step.reminderSentAt = DateTime.now();
           _triggerReminder(batch, '发酵好了');
           changed = true;
         }
@@ -201,7 +202,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
           changed = true;
         } else if (sinceReminder >= 2) {
           // 2 分钟后每 30 秒间歇提醒
-          if (sinceReminder * 60 % 30 == 0) {
+          final sinceSeconds = DateTime.now().difference(step.reminderSentAt!).inSeconds;
+          if (sinceSeconds >= 120 && sinceSeconds % 30 == 0) {
             _triggerIntermittentReminder(batch, '发酵好了');
           }
         }
@@ -225,7 +227,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         if (DateTime.now().isAfter(batch.simmeringEnd!)) {
           final settings = ref.read(settingsProvider);
           step.status = StepStatus.done;
-          step.reminderSentAt ??= DateTime.now();
+          step.reminderSentAt = DateTime.now();
           if (settings.simmeringReminder) {
             _triggerSimmeringHint(batch);
           }
@@ -240,7 +242,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         final remain = step.remainingSeconds;
         if (remain != null && remain <= 0) {
           step.status = StepStatus.done;
-          step.reminderSentAt ??= DateTime.now();
+          step.reminderSentAt = DateTime.now();
           _triggerReminder(batch, '该关火了');
           changed = true;
         }
@@ -253,7 +255,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         final remain = step.remainingSeconds;
         if (remain != null && remain <= 0) {
           step.status = StepStatus.done;
-          step.reminderSentAt ??= DateTime.now();
+          step.reminderSentAt = DateTime.now();
           final nextIdx = batch.currentStepIndex + 1;
           if (nextIdx < batch.steps.length) {
             _triggerReminder(batch, batch.steps[nextIdx].node.announcementAction ?? '');
@@ -270,7 +272,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         if (remain != null && remain <= 0) {
           parallel.isParallelRunning = false;
           parallel.status = StepStatus.done;
-          parallel.reminderSentAt ??= DateTime.now();
+          parallel.reminderSentAt = DateTime.now();
           // 烧水完成 → 提醒上锅
           _triggerReminder(batch, '该上锅了');
           changed = true;
@@ -336,7 +338,13 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       parallel.actualConfirm = DateTime.now();
       batch.parallelStep = null;
       // 交接后并行步骤即为当前步骤 — 确认后推进到下一步
-      if (batch.currentStep?.status == StepStatus.done) {
+      final current = batch.currentStep;
+      if (current?.status == StepStatus.evaluating) {
+        // 发酵仍在评价中 → 自动标记低置信度并推进
+        batch.fermentationResult = FermentationResult.perfect;
+        current!.lowConfidence = true;
+        _evaluateFermentationInternal(batch, FermentationResult.perfect);
+      } else if (current?.status == StepStatus.done) {
         _advanceToNext(batch, idx);
       }
     }
@@ -361,15 +369,21 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     ReminderManager.instance.stop();
 
     if (current.status == StepStatus.awaitingConfirmation) {
-      // 首次确认 → 开始倒计时
-      current.actualStart = DateTime.now();
-      current.plannedStart = DateTime.now();
-      if (current.node.defaultDurationMinutes != null) {
+      if (current.node.defaultDurationMinutes == null) {
+        // 无倒计时步骤（揭锅）→ 直接完成并推进
+        current.actualStart = DateTime.now();
+        current.actualConfirm = DateTime.now();
+        current.status = StepStatus.done;
+        _advanceToNext(batch, idx);
+      } else {
+        // 首次确认 → 开始倒计时
+        current.actualStart = DateTime.now();
+        current.plannedStart = DateTime.now();
         current.plannedEnd = DateTime.now().add(
           Duration(minutes: current.node.defaultDurationMinutes!),
         );
+        current.status = StepStatus.running;
       }
-      current.status = StepStatus.running;
     } else if (current.status == StepStatus.done) {
       // 倒计时已结束 → 确认完成并推进
       current.actualConfirm = DateTime.now();
@@ -450,17 +464,16 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     // V2: 记录调整行为用于习惯默认值
     final temp = batch.temperature;
     if (current.node.type == StepType.fermentation) {
-      final finalMinutes = current.remainingSeconds != null
-          ? (current.remainingSeconds! ~/ 60) + deltaMinutes
-          : null;
-      if (finalMinutes != null) {
-        HabitDefaultService.instance.recordAdjustment(
-          recipeId: batch.recipe.id,
-          temperature: temp,
-          adjustmentMinutes: deltaMinutes,
-          finalMinutes: finalMinutes,
-        );
-      }
+      // 用绝对总时长（plannedEnd - plannedStart），不依赖 remainingSeconds
+      final finalMinutes = current.plannedEnd!.difference(
+        current.plannedStart ?? current.actualStart ?? DateTime.now(),
+      ).inMinutes;
+      HabitDefaultService.instance.recordAdjustment(
+        recipeId: batch.recipe.id,
+        temperature: temp,
+        adjustmentMinutes: deltaMinutes,
+        finalMinutes: finalMinutes,
+      );
     }
 
     state = List.of(state);
@@ -574,12 +587,11 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       }
 
       // 如果该步骤已作为并行步骤启动（如烧水在发酵尾部已并行），
-      // 交接后保持当前状态不变：
-      //   awaitingConfirmation → 用户仍需点击「已开始烧水」
-      //   running → 倒计时已在进行中（actualStart/plannedEnd 已在 confirmParallelStep 设置）
+      // 交接后保持当前状态不变，不清理 parallelStep——
+      // _tick 第 6 节仍需 parallelStep 检测烧水到点。
+      // parallelStep 在 confirmParallelStep 确认「该上锅了」时清理。
       if (next.isParallelRunning) {
         next.isParallelRunning = false;
-        batch.parallelStep = null;
         return;
       }
 
@@ -618,6 +630,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       _saveBatchRecord(batch);
       // 回收编号 — 完成后立即释放，允许开新锅
       ref.read(numberPoolProvider).release(batch.displayNumber);
+      // 清理持久化 — 防止崩溃恢复后残留已完成批次
+      ActiveBatchStorage.instance.removeBatch(batch.id);
       // 无活跃批次时停止前台服务
       _stopForegroundIfIdle();
     }
@@ -638,12 +652,10 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   }
 
   /// 触发提醒 — §5.2
+  ///
+  /// 注意：此方法不设置 reminderSentAt——由调用方在正确的 step 上设置，
+  /// 避免并行烧水提醒污染发酵步骤的 reminderSentAt（I6 修复）。
   void _triggerReminder(Batch batch, String actionText) {
-    final step = batch.currentStep;
-    if (step != null) {
-      step.reminderSentAt ??= DateTime.now();
-    }
-
     final req = ReminderRequest(
       batchNumber: batch.displayNumber,
       recipeName: batch.recipe.name,
@@ -821,6 +833,11 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     }
 
     state = batches;
+
+    // 恢复前台服务 — 确保保活不中断
+    if (state.isNotEmpty) {
+      _startForegroundIfNeeded();
+    }
   }
 }
 

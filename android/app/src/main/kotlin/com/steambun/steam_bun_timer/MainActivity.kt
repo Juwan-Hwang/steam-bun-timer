@@ -38,6 +38,9 @@ class MainActivity : FlutterActivity() {
     private var voiceChannel: MethodChannel? = null
     private var isForegroundActive = false
 
+    /// 音量键拦截开关 — 仅在有活跃批次时拦截
+    private var interceptVolumeKeys = false
+
     // P1-1: 语音识别器
     private var speechRecognizer: SpeechRecognizer? = null
     private var isListening = false
@@ -59,6 +62,7 @@ class MainActivity : FlutterActivity() {
                     val content = call.argument<String>("content") ?: "运行中"
                     TimerForegroundService.start(this, title, content)
                     isForegroundActive = true
+                    interceptVolumeKeys = true
                     result.success(null)
                 }
                 "updateNotification" -> {
@@ -71,6 +75,7 @@ class MainActivity : FlutterActivity() {
                 "stopForeground" -> {
                     TimerForegroundService.stop(this)
                     isForegroundActive = false
+                    interceptVolumeKeys = false
                     result.success(null)
                 }
                 "scheduleAlarm" -> {
@@ -147,8 +152,11 @@ class MainActivity : FlutterActivity() {
         when (keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP,
             KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                methodChannel?.invokeMethod("onKeyEvent", keyCode)
-                return true
+                if (interceptVolumeKeys) {
+                    methodChannel?.invokeMethod("onKeyEvent", keyCode)
+                    return true
+                }
+                return super.onKeyDown(keyCode, event)
             }
             // 蓝牙 HID 遥控器常见按键
             KeyEvent.KEYCODE_ENTER,           // 66 — 多数蓝牙自拍器
@@ -166,7 +174,10 @@ class MainActivity : FlutterActivity() {
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP,
-            KeyEvent.KEYCODE_VOLUME_DOWN,
+            KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                if (interceptVolumeKeys) return true
+                return super.onKeyUp(keyCode, event)
+            }
             KeyEvent.KEYCODE_ENTER,
             KeyEvent.KEYCODE_HEADSETHOOK,
             KeyEvent.KEYCODE_CALL,

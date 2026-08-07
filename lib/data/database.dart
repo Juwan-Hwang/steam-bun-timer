@@ -102,7 +102,9 @@ class HabitDefaults extends Table {
 
 @DriftDatabase(tables: [BatchRecords, RecipeRecords, HabitDefaults])
 class AppDatabase extends _$AppDatabase {
-  AppDatabase() : super(_openConnection());
+  AppDatabase._() : super(_openConnection());
+  static final instance = AppDatabase._();
+  factory AppDatabase() => instance;
 
   @override
   int get schemaVersion => 2;
@@ -139,6 +141,8 @@ class AppDatabase extends _$AppDatabase {
   Future<String> exportCsv() async {
     final records = await getAllBatchRecords();
     final buffer = StringBuffer();
+    // UTF-8 BOM — 确保 Excel 正确识别中文
+    buffer.write('\uFEFF');
 
     // CSV 表头
     buffer.writeln(
@@ -179,9 +183,9 @@ class AppDatabase extends _$AppDatabase {
     return buffer.toString();
   }
 
-  /// CSV 字段转义 — 含逗号/引号/换行时用双引号包裹并转义内部引号
+  /// CSV 字段转义 — 含逗号/引号/换行/回车时用双引号包裹并转义内部引号
   static String _csvEscape(String value) {
-    if (value.contains(',') || value.contains('"') || value.contains('\n')) {
+    if (value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r')) {
       return '"${value.replaceAll('"', '""')}"';
     }
     return value;

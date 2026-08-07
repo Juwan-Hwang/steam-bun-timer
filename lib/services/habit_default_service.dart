@@ -12,7 +12,7 @@ class HabitDefaultService {
   HabitDefaultService._();
   static final instance = HabitDefaultService._();
 
-  final _db = AppDatabase();
+  final _db = AppDatabase.instance;
 
   /// P2-1: 生成习惯方向存储 key
   String _directionKey(String recipeId, int tempLow, int tempHigh) =>
@@ -115,18 +115,14 @@ class HabitDefaultService {
     return null;
   }
 
-  /// P2-1: 检查是否同方向调整且数值一致
-  /// §3.2: 「同方向且数值一致连续 3 次」
-  /// lastDirection / currentDirection: 1=加长, -1=缩短
-  /// lastMinutes / newMinutes: 最终设定的发酵分钟数
+  /// P2-1: 检查是否同方向调整
+  /// §3.2: 「同方向调整连续 3 次」
+  /// 仅检查方向一致，不检查最终数值——因为 +1 每次剩余时间不同，
+  /// 数值几乎不可能一致，导致学习永不触发（I10 修复）
   bool _sameDirection(
     int lastDirection, int currentDirection,
     int lastMinutes, int newMinutes,
   ) {
-    // 方向必须一致（同为加长或同为缩短）
-    if (lastDirection != currentDirection) return false;
-    // 数值必须一致（最终分钟数相同）
-    if (lastMinutes != newMinutes) return false;
-    return true;
+    return lastDirection == currentDirection;
   }
 }

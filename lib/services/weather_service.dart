@@ -13,7 +13,7 @@ import 'package:permission_handler/permission_handler.dart';
 class WeatherData {
   final double temperature;
   final int? humidity;
-  WeatherData({required this.temperature, this.humidity});
+  const WeatherData({required this.temperature, this.humidity});
 }
 
 /// API 测试结果
@@ -21,7 +21,7 @@ class WeatherTestResult {
   final bool success;
   final String message;
   final WeatherData? data;
-  WeatherTestResult({required this.success, required this.message, this.data});
+  const WeatherTestResult({required this.success, required this.message, this.data});
 }
 
 class WeatherService {

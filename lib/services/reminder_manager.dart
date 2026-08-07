@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:vibration/vibration.dart';
 import 'announcement_player.dart';
+import 'foreground_task_handler.dart';
+import 'voice_command_service.dart';
 
 /// 提醒级别
 enum ReminderLevel {
@@ -59,12 +61,16 @@ class ReminderManager {
   /// 开始提醒
   Future<void> start(ReminderRequest request) async {
     if (_activeReminder != null) {
-      // 已有提醒在运行，如果是更高级别则替换
-      if (request.level.index <= _activeReminder!.level.index) return;
+      // 仅当新请求优先级严格更低时才丢弃
+      // 同级或更高 → 替换（多锅同时到点不丢提醒）
+      if (request.level.index > _activeReminder!.level.index) return;
       stop();
     }
 
     _activeReminder = request;
+
+    // 播报期间暂停语音识别 — 防止自触发（I2 修复）
+    VoiceCommandService.instance.setAnnouncing(true);
 
     // 播放语音播报（录音优先，TTS 兜底）
     await _playAnnouncement(request);
@@ -93,7 +99,13 @@ class ReminderManager {
     _loopTimer = null;
     try { await _alarmPlayer.stop(); } catch (_) {}
     await AnnouncementPlayer.instance.stop();
+    // 取消精确闹钟兜底 — 防止幽灵通知（B3 修复）
+    if (_activeReminder != null) {
+      ForegroundTaskHandler.instance.cancelExactAlarm(_activeReminder!.batchNumber);
+    }
     _activeReminder = null;
+    // 恢复语音识别
+    VoiceCommandService.instance.setAnnouncing(false);
     onReminderStop?.call();
   }
 

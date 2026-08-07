@@ -5,6 +5,7 @@
 /// 这样有录音时用录音（纯正川味），没录音时也不静默
 library;
 
+import 'dart:async';
 import 'dart:collection';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -109,12 +110,16 @@ class AnnouncementPlayer {
   /// stop() 标志 — 防止 stop 后仍触发 TTS 兜底或补播
   bool _stopped = false;
 
+  /// 代际计数器 — 每次 play() 递增，_processQueue 检查代际防并发竞态（I13 修复）
+  int _generation = 0;
+
   /// 播放一条完整的播报
   ///
   /// 如果当前正在播放，只记录 _latestReq 不入队——
   /// 避免新请求的分段与当前队列混排，且防止 _processQueue 结束时
   /// 补播已经入队并消费过的请求导致重复播报。
   Future<void> play(AnnouncementRequest req) async {
+    _generation++;
     _stopped = false;
     _latestReq = req;
     if (_isPlaying) return; // 正在播放 → 仅记录最新请求，待当前队列播完后补播
@@ -139,50 +144,62 @@ class AnnouncementPlayer {
   Future<void> _processQueue(AnnouncementRequest req) async {
     if (_isPlaying) return;
     _isPlaying = true;
+    final myGen = _generation;
 
-    while (_queue.isNotEmpty && !_stopped) {
+    while (_queue.isNotEmpty && !_stopped && _generation == myGen) {
       final asset = _queue.removeFirst();
       final ok = await _playAudioSegment(asset);
+      if (_generation != myGen) break; // 新 play() 或 stop() 已接管
       if (!ok) {
         _queue.clear();
-        if (!_stopped) {
-          // 录音播放失败 → 整体切换到 TTS 播报完整文案
+        if (!_stopped && _generation == myGen) {
           await _playTts(req);
         }
         break;
       }
     }
 
-    _isPlaying = false;
+    if (_generation == myGen) {
+      _isPlaying = false;
+    }
 
     // 播放期间如果有新的 play() 被跳过，补播最新的请求
-    if (!_stopped && _latestReq != null && _latestReq != req) {
+    if (!_stopped && _generation == myGen && _latestReq != null && _latestReq != req) {
       final pending = _latestReq!;
       _latestReq = null;
       await play(pending);
-    } else {
+    } else if (_generation == myGen) {
       _latestReq = null;
     }
   }
 
   /// 播放单个音频分段，返回是否成功
-  /// P2-3: 用 onPlayerComplete + onPlayerStateChanged + 超时三路竞速
-  /// 避免录音缺失时 onPlayerComplete 永不触发导致 _isPlaying 永久卡死
+  /// 用 Completer + 独立订阅避免 Future.any 捕获上一段遗留的 stopped 状态
   Future<bool> _playAudioSegment(String asset) async {
     try {
       await _audioPlayer.play(AssetSource('audio/$asset'));
-      // 竞速等待：
-      //   onPlayerComplete → 成功
-      //   onPlayerStateChanged 回到 stopped → 失败（文件缺失/播放错误）
-      //   3 秒超时 → 失败
-      final result = await Future.any([
-        _audioPlayer.onPlayerComplete.first.then((_) => true),
-        _audioPlayer.onPlayerStateChanged
-            .where((s) => s == PlayerState.stopped)
-            .first
-            .then((_) => false),
-        Future<bool>.delayed(const Duration(seconds: 5), () => false),
-      ]);
+
+      final completer = Completer<bool>();
+      late StreamSubscription completeSub;
+      late StreamSubscription stateSub;
+
+      completeSub = _audioPlayer.onPlayerComplete.listen((_) {
+        if (!completer.isCompleted) completer.complete(true);
+      });
+      stateSub = _audioPlayer.onPlayerStateChanged.listen((s) {
+        if (s == PlayerState.stopped && !completer.isCompleted) {
+          completer.complete(false);
+        }
+      });
+
+      final timer = Timer(const Duration(seconds: 5), () {
+        if (!completer.isCompleted) completer.complete(false);
+      });
+
+      final result = await completer.future;
+      await completeSub.cancel();
+      await stateSub.cancel();
+      timer.cancel();
       return result;
     } catch (_) {
       return false;

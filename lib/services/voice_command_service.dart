@@ -49,7 +49,13 @@ class VoiceCommandService {
   bool _isInitialized = false;
   bool _isEnabled = false;
 
+  /// 播报中标志 — 为 true 时忽略语音识别结果，防止自触发（I2 修复）
+  bool _isAnnouncing = false;
+
   bool get isEnabled => _isEnabled;
+
+  /// 设置播报中标志 — 由 ReminderManager 调用
+  void setAnnouncing(bool value) => _isAnnouncing = value;
 
   /// 初始化 sherpa-onnx KWS 引擎
   /// 需在 platform 层加载模型文件
@@ -59,6 +65,7 @@ class VoiceCommandService {
       _channel.setMethodCallHandler((call) async {
         switch (call.method) {
           case 'onCommand':
+            if (_isAnnouncing) return; // 播报中忽略，防止自触发
             final cmdIndex = call.arguments as int;
             final cmd = VoiceCommand.values[cmdIndex];
             onCommand?.call(cmd);

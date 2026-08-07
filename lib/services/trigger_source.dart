@@ -30,14 +30,14 @@ class HardwareKeyTriggerSource implements TriggerSource {
   bool _isActive = false;
 
   /// 蓝牙 HID 按键码集合
-  static const _bluetoothKeyCodes = {66, 79, 5}; // ENTER, HEADSETHOOK, CALL
+  static const _bluetoothKeyCodes = {66, 79, 5, 23, 27}; // ENTER, HEADSETHOOK, CALL, DPAD_CENTER, CAMERA
 
   @override
   void start() {
     if (_isActive) return;
     _isActive = true;
     ForegroundTaskHandler.instance.onKeyEvent = (keyCode) {
-      // 24=VOLUME_UP, 25=VOLUME_DOWN, 66=ENTER, 79=HEADSETHOOK, 5=CALL
+      // 24=VOLUME_UP, 25=VOLUME_DOWN, 66=ENTER, 79=HEADSETHOOK, 5=CALL, 23=DPAD_CENTER, 27=CAMERA
       if (keyCode == 24 || keyCode == 25 || _bluetoothKeyCodes.contains(keyCode)) {
         final source = _bluetoothKeyCodes.contains(keyCode)
             ? TriggerSourceType.bluetoothButton
