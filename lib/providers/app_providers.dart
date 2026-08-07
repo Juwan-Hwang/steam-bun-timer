@@ -165,6 +165,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     bool changed = false;
 
     for (final batch in state) {
+      if (batch.status != BatchStatus.active) continue;
       final step = batch.currentStep;
       if (step == null) continue;
 
@@ -199,6 +200,11 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
           step.reminderSentAt != null) {
         final sinceReminder = DateTime.now().difference(step.reminderSentAt!).inMinutes;
         if (sinceReminder >= 5) {
+          // P2: 自动推进前先停止当前循环提醒
+          // 否则 isReminding 永久卡 true，_checkPendingReminders 对所有批次失效
+          ReminderManager.instance.stop();
+          ref.read(activeReminderProvider.notifier).state = null;
+
           step.lowConfidence = true;
           batch.fermentationResult = FermentationResult.perfect;
           // 自动转入下阶段（§6 超过 5 min 未确认打低置信度，自动转入下阶段）
@@ -918,15 +924,52 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     // 恢复前台服务 — 确保保活不中断
     if (state.isNotEmpty) {
       _startForegroundIfNeeded();
-      // N2: 重新注册精确闹钟 — Android 重启后 AlarmManager 全部清空
-      // 为每个有待提醒步骤的批次重新设置 5 秒兜底闹钟
+
+      // 自愈：显式重设 has_active 标志
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('has_active', true);
+
+      // P1 + I1 + N2: 重新注册精确闹钟 — Android 重启后 AlarmManager 全部清空
+      // 覆盖所有需要到点提醒的场景：
+      //   running → 按 plannedEnd 时间注册（最常见场景）
+      //   evaluating/done/awaitingConfirmation → 立即 5 秒兜底
+      //   parallelStep done/awaitingConfirmation → 立即 5 秒兜底
       for (final batch in state) {
         if (batch.status != BatchStatus.active) continue;
+
+        // 检查并行步骤
+        final parallel = batch.parallelStep;
+        if (parallel != null && parallel.reminderSentAt != null &&
+            (parallel.status == StepStatus.done ||
+             parallel.status == StepStatus.awaitingConfirmation)) {
+          ForegroundTaskHandler.instance.scheduleExactAlarm(
+            id: batch.displayNumber,
+            triggerAt: DateTime.now().add(const Duration(seconds: 5)),
+            title: '${batch.displayNumber}号 ${batch.recipe.name}',
+            body: parallel.status == StepStatus.done ? '该上锅了' : '该烧水了',
+          );
+          continue; // 并行步骤优先，跳过当前步骤
+        }
+
+        // 检查当前步骤
         final step = batch.currentStep;
-        if (step != null && step.reminderSentAt != null &&
+        if (step == null) continue;
+
+        if (step.status == StepStatus.running &&
+            step.plannedEnd != null &&
+            step.plannedEnd!.isAfter(DateTime.now())) {
+          // P1: running 步骤按 plannedEnd 注册闹钟
+          ForegroundTaskHandler.instance.scheduleExactAlarm(
+            id: batch.displayNumber,
+            triggerAt: step.plannedEnd!,
+            title: '${batch.displayNumber}号 ${batch.recipe.name}',
+            body: _actionTextForStep(step),
+          );
+        } else if (step.reminderSentAt != null &&
             (step.status == StepStatus.evaluating ||
              step.status == StepStatus.done ||
              step.status == StepStatus.awaitingConfirmation)) {
+          // 已在待确认状态 → 5 秒兜底
           ForegroundTaskHandler.instance.scheduleExactAlarm(
             id: batch.displayNumber,
             triggerAt: DateTime.now().add(const Duration(seconds: 5)),

@@ -135,6 +135,15 @@ class AnnouncementPlayer {
     if (n != null) segments.add(n.audioAsset);
     if (v != null) segments.add(v.audioAsset);
     if (a != null) segments.add(a.audioAsset);
+
+    // I3: 如果动作段无录音但有文案，不能静默丢弃 —
+    // 编号/品种段播放成功后 TTS 兜底不会触发，动作文案永远不被播报。
+    // 直接整体走 TTS，确保完整文案被播报。
+    if (a == null && req.actionText.isNotEmpty) {
+      await _playTts(req);
+      return;
+    }
+
     for (final s in segments) {
       _queue.add(s);
     }

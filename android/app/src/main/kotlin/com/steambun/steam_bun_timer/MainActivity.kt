@@ -510,6 +510,15 @@ class AlarmReceiver : BroadcastReceiver() {
             nm.createNotificationChannel(channel)
         }
 
+        // I2: Android 10+ 限制后台 startActivity — 用 fullScreenIntent 替代
+        // fullScreenIntent 在锁屏/熄屏时直接全屏显示，前台时作为 heads-up 通知
+        val fullScreenIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context, 0, fullScreenIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
         val notification = NotificationCompat.Builder(context, "steam_bun_alarm")
             .setContentTitle(title)
             .setContentText(body)
@@ -517,16 +526,9 @@ class AlarmReceiver : BroadcastReceiver() {
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
             .build()
 
         nm.notify(System.currentTimeMillis().toInt(), notification)
-
-        // 同时通过 MethodChannel 通知 Flutter 层（如果 App 在前台）
-        try {
-            val mainIntent = Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            }
-            context.startActivity(mainIntent)
-        } catch (_: Exception) {}
     }
 }
