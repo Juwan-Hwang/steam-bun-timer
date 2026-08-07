@@ -147,13 +147,15 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   ActiveBatchesNotifier(this.ref) : super([]) {
     // 每秒检查所有批次状态
     _checkTimer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
-    // R5: stop() 后扫描其他批次待提醒步骤并恢复
-    ReminderManager.instance.onReminderStop = _checkPendingReminders;
+    // N3: 不再从 onReminderStop 调用 _checkPendingReminders
+    // 改为在 _tick() 末尾调用，避免 stop().then(confirm) 竞态中
+    // 被确认批次自身被重复触发提醒
   }
 
   @override
   void dispose() {
     _checkTimer?.cancel();
+    ReminderManager.instance.onReminderStop = null;
     super.dispose();
   }
 
@@ -289,6 +291,10 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       state = List.of(state);
       _persistAll();
     }
+
+    // N3: 在 _tick 末尾检查待恢复提醒 — 此时所有状态变更已完成
+    // stop().then(confirm) 场景下被确认步骤已推进，不会被误触发
+    _checkPendingReminders();
   }
 
   /// 开始一个新批次
@@ -722,8 +728,10 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     }
   }
 
-  /// R5: stop() 后扫描其他批次是否有待提醒步骤
+  /// R5: 扫描其他批次是否有待提醒步骤
   /// 多锅场景下 B 替换 A 后，A 的提醒被中断 — 确认 B 后自动恢复 A
+  /// N3: 从 _tick() 末尾调用，此时状态已稳定
+  /// N5: isReminding 幂等检查防止重复触发
   void _checkPendingReminders() {
     if (state.isEmpty) return;
     if (ReminderManager.instance.isReminding) return;
@@ -746,17 +754,23 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       final step = batch.currentStep;
       if (step == null || step.reminderSentAt == null) continue;
       if (step.status == StepStatus.evaluating) {
-        _triggerReminder(batch, '发酵好了');
+        _triggerIntermittentReminder(batch, '发酵好了');
         return;
       }
       if (step.status == StepStatus.done) {
-        _triggerReminder(batch, _actionTextForStep(step));
+        // 根据步骤类型选择正确的提醒级别（轻微级修复）
+        if (step.node.type == StepType.simmering) {
+          _triggerSimmeringHint(batch);
+        } else {
+          _triggerReminder(batch, _actionTextForStep(step));
+        }
         return;
       }
     }
   }
 
   /// 根据步骤类型推导提醒文案
+  /// 文案必须与 AnnouncementCatalog.actions 中的 text 匹配才能播放录音
   String _actionTextForStep(StepRuntime step) {
     switch (step.node.type) {
       case StepType.fermentation:
@@ -767,11 +781,11 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         return '该关火了';
       case StepType.simmering:
       case StepType.uncover:
-        return '该揭锅了';
+        return '可以揭锅了'; // 匹配录音 action_uncover.wav
       case StepType.flipping:
-        return '该翻面了';
+        return '该翻面了'; // 无录音，TTS 兜底
       case StepType.plateOut:
-        return '该出锅了';
+        return '该出锅了'; // 无录音，TTS 兜底
     }
   }
 
@@ -864,7 +878,9 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   }
 
   /// 持久化单个批次 — §5.1 崩溃恢复
+  /// N6: 仅持久化 active 状态的批次，防止已完成批次被写回
   Future<void> _persistBatch(Batch batch) async {
+    if (batch.status != BatchStatus.active) return;
     await ActiveBatchStorage.instance.saveBatch(batch);
   }
 
@@ -878,7 +894,12 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   /// 从持久化恢复 — §5.1 App 重启后重建倒计时
   Future<void> restoreFromPersistence() async {
     final batches = await ActiveBatchStorage.instance.loadAllBatches();
-    if (batches.isEmpty) return;
+    if (batches.isEmpty) {
+      // 无活跃批次时清除标志，确保 BootReceiver 下次不空转
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('has_active', false);
+      return;
+    }
 
     // 恢复编号池 — 为每个批次重新占用编号
     final pool = ref.read(numberPoolProvider);
@@ -897,6 +918,23 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     // 恢复前台服务 — 确保保活不中断
     if (state.isNotEmpty) {
       _startForegroundIfNeeded();
+      // N2: 重新注册精确闹钟 — Android 重启后 AlarmManager 全部清空
+      // 为每个有待提醒步骤的批次重新设置 5 秒兜底闹钟
+      for (final batch in state) {
+        if (batch.status != BatchStatus.active) continue;
+        final step = batch.currentStep;
+        if (step != null && step.reminderSentAt != null &&
+            (step.status == StepStatus.evaluating ||
+             step.status == StepStatus.done ||
+             step.status == StepStatus.awaitingConfirmation)) {
+          ForegroundTaskHandler.instance.scheduleExactAlarm(
+            id: batch.displayNumber,
+            triggerAt: DateTime.now().add(const Duration(seconds: 5)),
+            title: '${batch.displayNumber}号 ${batch.recipe.name}',
+            body: _actionTextForStep(step),
+          );
+        }
+      }
     }
   }
 }

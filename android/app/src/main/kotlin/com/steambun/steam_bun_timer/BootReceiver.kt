@@ -10,13 +10,15 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
 
-        // 检查关机前是否有活跃批次 — 由 Flutter 侧 ActiveBatchStorage 写入
-        val prefs = context.getSharedPreferences("active_batch_meta", Context.MODE_PRIVATE)
-        val hasActive = prefs.getBoolean("has_active", false)
+        // 读取 Flutter shared_preferences 写入的标志
+        // Flutter 的 shared_preferences 包在 Android 上写入 FlutterSharedPreferences 文件，
+        // 且所有 key 自动加 flutter. 前缀（N1 修复）
+        val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        val hasActive = prefs.getBoolean("flutter.has_active", false)
         if (!hasActive) return
 
-        // 启动前台服务 — 保持进程存活，AlarmManager 到点时可唤醒
-        // Flutter 引擎在用户打开 App 后启动，restoreFromPersistence 重建完整状态
+        // 启动前台服务 — 保持进程存活
+        // Flutter 引擎在用户打开 App 后启动，restoreFromPersistence 重建完整状态并重注册闹钟
         TimerForegroundService.start(context, "蒸馒头计时器", "恢复中…")
     }
 }

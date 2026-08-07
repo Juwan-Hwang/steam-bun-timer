@@ -88,7 +88,9 @@ class AnnouncementRequest {
     final n = AnnouncementCatalog.getNumber(number);
     final v = AnnouncementCatalog.getVariety(recipeId);
     final a = AnnouncementCatalog.getAction(actionText);
-    return '${n?.text ?? ''} ${v?.text ?? ''} ${a?.text ?? ''}';
+    // 如果动作文案不在目录中（如「该翻面了」无对应录音），
+    // 直接用 actionText 作为 TTS 文案，不丢动作段
+    return '${n?.text ?? ''} ${v?.text ?? ''} ${a?.text ?? actionText}';
   }
 }
 
@@ -161,7 +163,10 @@ class AnnouncementPlayer {
       }
     }
 
-    // 无条件复位 _isPlaying — 不门控代际，防止死锁（R1 修复）
+    // 代际不匹配 → 新 play() 已递增代际并启动新队列，新队列 owns _isPlaying
+    // 旧队列直接退出，不复位 _isPlaying 防止覆盖新队列状态（N4 修复）
+    if (_generation != myGen) return;
+
     _isPlaying = false;
 
     if (_stopped) {
@@ -184,11 +189,12 @@ class AnnouncementPlayer {
   /// 播放单个音频分段，返回是否成功
   /// 用 Completer + 独立订阅避免 Future.any 捕获上一段遗留的 stopped 状态
   Future<bool> _playAudioSegment(String asset) async {
-    try {
-      final completer = Completer<bool>();
-      late StreamSubscription completeSub;
-      late StreamSubscription stateSub;
+    final completer = Completer<bool>();
+    StreamSubscription? completeSub;
+    StreamSubscription? stateSub;
+    Timer? timer;
 
+    try {
       // 订阅必须在 play() 之前 — 极短音频可能在 play() 返回前就完成
       completeSub = _audioPlayer.onPlayerComplete.listen((_) {
         if (!completer.isCompleted) completer.complete(true);
@@ -201,17 +207,18 @@ class AnnouncementPlayer {
 
       await _audioPlayer.play(AssetSource('audio/$asset'));
 
-      final timer = Timer(const Duration(seconds: 5), () {
+      timer = Timer(const Duration(seconds: 5), () {
         if (!completer.isCompleted) completer.complete(false);
       });
 
-      final result = await completer.future;
-      await completeSub.cancel();
-      await stateSub.cancel();
-      timer.cancel();
-      return result;
+      return await completer.future;
     } catch (_) {
       return false;
+    } finally {
+      // 无论成功/异常都清理订阅和定时器，防内存泄漏
+      await completeSub?.cancel();
+      await stateSub?.cancel();
+      timer?.cancel();
     }
   }
 
