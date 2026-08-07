@@ -103,8 +103,12 @@ class AnnouncementPlayer {
   bool _isPlaying = false;
   bool _ttsReady = false;
 
+  /// 最新的播报请求 — _isPlaying 时 play() 被跳过，用此字段补播
+  AnnouncementRequest? _latestReq;
+
   /// 播放一条完整的播报
   Future<void> play(AnnouncementRequest req) async {
+    _latestReq = req;
     final segments = <String>[];
     final n = AnnouncementCatalog.getNumber(req.number);
     final v = AnnouncementCatalog.getVariety(req.recipeId);
@@ -144,6 +148,15 @@ class AnnouncementPlayer {
     }
 
     _isPlaying = false;
+
+    // 播放期间如果有新的 play() 被跳过，补播最新的请求
+    if (_latestReq != null && _latestReq != req) {
+      final pending = _latestReq!;
+      _latestReq = null;
+      await play(pending);
+    } else {
+      _latestReq = null;
+    }
   }
 
   /// 播放单个音频分段，返回是否成功
@@ -162,7 +175,7 @@ class AnnouncementPlayer {
             .where((s) => s == PlayerState.stopped)
             .first
             .then((_) => false),
-        Future<bool>.delayed(const Duration(seconds: 3), () => false),
+        Future<bool>.delayed(const Duration(seconds: 5), () => false),
       ]);
       return result;
     } catch (_) {
@@ -192,6 +205,7 @@ class AnnouncementPlayer {
   /// 停止播放
   Future<void> stop() async {
     _queue.clear();
+    _latestReq = null;
     try { await _audioPlayer.stop(); } catch (_) {}
     try { await _tts.stop(); } catch (_) {}
     _isPlaying = false;

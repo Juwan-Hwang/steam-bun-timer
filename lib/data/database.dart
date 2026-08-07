@@ -150,7 +150,7 @@ class AppDatabase extends _$AppDatabase {
     for (final r in records) {
       buffer.writeln([
         r.displayNumber,
-        r.recipeName,
+        _csvEscape(r.recipeName),
         r.fermentationStart?.toIso8601String() ?? '',
         r.fermentationConfirm?.toIso8601String() ?? '',
         r.boilingStart?.toIso8601String() ?? '',
@@ -160,23 +160,31 @@ class AppDatabase extends _$AppDatabase {
         r.simmeringStart?.toIso8601String() ?? '',
         r.uncoverConfirm?.toIso8601String() ?? '',
         r.fermentationActualMinutes ?? '',
-        r.fermentationResult ?? '',
+        _csvEscape(r.fermentationResult ?? ''),
         r.lowConfidence,
         r.simmeringIntervalMinutes ?? '',
         r.temperature ?? '',
         r.humidity ?? '',
         r.createdAt.toIso8601String(),
-        r.season,
+        _csvEscape(r.season),
         r.adjustmentMinutes,
-        r.status,
-        r.positionLabel ?? '',
+        _csvEscape(r.status),
+        _csvEscape(r.positionLabel ?? ''),
         r.boilingReminderDelaySeconds ?? '',
         r.steamingReminderDelaySeconds ?? '',
-        r.extensionsLog ?? '',
+        _csvEscape(r.extensionsLog ?? ''),
       ].join(','));
     }
 
     return buffer.toString();
+  }
+
+  /// CSV 字段转义 — 含逗号/引号/换行时用双引号包裹并转义内部引号
+  static String _csvEscape(String value) {
+    if (value.contains(',') || value.contains('"') || value.contains('\n')) {
+      return '"${value.replaceAll('"', '""')}"';
+    }
+    return value;
   }
 
   // ── 习惯默认值操作 ──

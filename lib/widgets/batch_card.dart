@@ -24,6 +24,7 @@ class BatchCard extends StatefulWidget {
   final void Function(int)? onExtendFermentation;
   final void Function(int)? onSetFermentationMinutes;
   final VoidCallback? onRestart; // 饼子「再来一锅」
+  final VoidCallback? onDismiss;  // 完成后从看板移除
   final void Function(String)? onSetPositionLabel;
 
   const BatchCard({
@@ -37,6 +38,7 @@ class BatchCard extends StatefulWidget {
     this.onExtendFermentation,
     this.onSetFermentationMinutes,
     this.onRestart,
+    this.onDismiss,
     this.onSetPositionLabel,
   });
 
@@ -147,6 +149,10 @@ class _BatchCardState extends State<BatchCard>
             if (b.isCompleted && b.recipe.id == 'flatbread') ...[
               const SizedBox(height: ZephyrSpacing.s3),
               _restartButton(z, accent),
+            ],
+            if (b.isCompleted) ...[
+              const SizedBox(height: ZephyrSpacing.s3),
+              _dismissButton(z),
             ],
           ],
         ),
@@ -558,6 +564,23 @@ class _BatchCardState extends State<BatchCard>
           side: BorderSide(color: accent.withValues(alpha: 0.3)),
         ),
         child: const Text('再来一锅', style: TextStyle(fontSize: ZephyrFontSize.lg, fontWeight: FontWeight.w700)),
+      ),
+    );
+  }
+
+  /// 完成后从看板移除
+  Widget _dismissButton(ZephyrSemantic z) {
+    return SizedBox(
+      width: double.infinity,
+      height: 56,
+      child: OutlinedButton(
+        onPressed: widget.onDismiss,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: z.textTertiary,
+          side: BorderSide(color: z.borderSubtle),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ZephyrRadius.overlay)),
+        ),
+        child: Text('收起', style: TextStyle(fontSize: ZephyrFontSize.base, fontWeight: FontWeight.w600)),
       ),
     );
   }

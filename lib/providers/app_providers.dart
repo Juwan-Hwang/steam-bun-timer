@@ -30,7 +30,6 @@ class AppSettings {
   final bool autoDimBrightness;
   final bool burnInProtection;
   final bool simmeringReminder;
-  final bool chargingProtection;
   final bool voiceEnabled;
 
   const AppSettings({
@@ -38,7 +37,6 @@ class AppSettings {
     this.autoDimBrightness = true,
     this.burnInProtection = true,
     this.simmeringReminder = true,
-    this.chargingProtection = false,
     this.voiceEnabled = false,
   });
 
@@ -47,7 +45,6 @@ class AppSettings {
     bool? autoDimBrightness,
     bool? burnInProtection,
     bool? simmeringReminder,
-    bool? chargingProtection,
     bool? voiceEnabled,
   }) {
     return AppSettings(
@@ -55,7 +52,6 @@ class AppSettings {
       autoDimBrightness: autoDimBrightness ?? this.autoDimBrightness,
       burnInProtection: burnInProtection ?? this.burnInProtection,
       simmeringReminder: simmeringReminder ?? this.simmeringReminder,
-      chargingProtection: chargingProtection ?? this.chargingProtection,
       voiceEnabled: voiceEnabled ?? this.voiceEnabled,
     );
   }
@@ -67,7 +63,6 @@ class AppSettings {
       autoDimBrightness: prefs.getBool('autoDimBrightness') ?? true,
       burnInProtection: prefs.getBool('burnInProtection') ?? true,
       simmeringReminder: prefs.getBool('simmeringReminder') ?? true,
-      chargingProtection: prefs.getBool('chargingProtection') ?? false,
       voiceEnabled: prefs.getBool('voiceEnabled') ?? false,
     );
   }
@@ -118,11 +113,6 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
   void toggleSimmeringReminder() {
     state = state.copyWith(simmeringReminder: !state.simmeringReminder);
     _save('simmeringReminder', state.simmeringReminder);
-  }
-
-  void toggleChargingProtection() {
-    state = state.copyWith(chargingProtection: !state.chargingProtection);
-    _save('chargingProtection', state.chargingProtection);
   }
 
   void toggleVoiceEnabled() {
@@ -205,6 +195,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         final sinceReminder = DateTime.now().difference(step.reminderSentAt!).inMinutes;
         if (sinceReminder >= 5) {
           step.lowConfidence = true;
+          batch.fermentationResult = FermentationResult.perfect;
           // 自动转入下阶段（§6 超过 5 min 未确认打低置信度，自动转入下阶段）
           _evaluateFermentationInternal(batch, FermentationResult.perfect);
           changed = true;
@@ -241,13 +232,15 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         }
       }
 
-      // 6. 检查并行烧水到点
+      // 6. 检查并行烧水到点 — 交接后 parallelStep 仍指向烧水步骤
+      //    不依赖 isParallelRunning（交接后已置 false），改为检查 status
       final parallel = batch.parallelStep;
-      if (parallel != null && parallel.isParallelRunning) {
+      if (parallel != null && parallel.status == StepStatus.running) {
         final remain = parallel.remainingSeconds;
         if (remain != null && remain <= 0) {
           parallel.isParallelRunning = false;
           parallel.status = StepStatus.done;
+          parallel.reminderSentAt ??= DateTime.now();
           // 烧水完成 → 提醒上锅
           _triggerReminder(batch, '该上锅了');
           changed = true;
@@ -305,9 +298,13 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       parallel.status = StepStatus.running;
       // actualStart 已在 _triggerParallelBoiling 中设置
     } else if (parallel.status == StepStatus.done) {
-      // 「该上锅了」→ 烧水已完成，清理并行引用
-      // 实际推进到下一步会在发酵评价后由 _advanceToNext 处理
+      // 「该上锅了」→ 烧水已完成
+      parallel.actualConfirm = DateTime.now();
       batch.parallelStep = null;
+      // 交接后并行步骤即为当前步骤 — 确认后推进到下一步
+      if (batch.currentStep?.status == StepStatus.done) {
+        _advanceToNext(batch, idx);
+      }
     }
 
     state = List.of(state);
@@ -477,12 +474,9 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     ref.read(numberPoolProvider).release(oldBatch.displayNumber);
     ActiveBatchStorage.instance.removeBatch(batchId);
 
-    // 创建新批次（同模板）
-    final newBatch = startBatch(oldBatch.recipe);
+    // 先移除旧批次，再通过 startBatch 创建新批次（startBatch 内部会 append + persist）
     state = List.from(state)..removeAt(idx);
-    if (newBatch != null) {
-      state = [...state, newBatch];
-    }
+    startBatch(oldBatch.recipe);
   }
 
   /// 设置位置标签
@@ -558,6 +552,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       batch.status = BatchStatus.completed;
       batch.completedAt = DateTime.now();
       _saveBatchRecord(batch);
+      // 回收编号 — 完成后立即释放，允许开新锅
+      ref.read(numberPoolProvider).release(batch.displayNumber);
       // 无活跃批次时停止前台服务
       _stopForegroundIfIdle();
     }

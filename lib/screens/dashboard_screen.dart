@@ -90,19 +90,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       return;
     }
 
-    // P0-3: 并行期间，根据提醒文案确认正确的目标工序
+    // P0-3: 并行步骤确认 — 用步骤状态机判断，不依赖文案匹配
     final parallel = batch.parallelStep;
-    if (parallel != null && reminderAction != null) {
-      // 「该烧水了」→ 确认并行烧水步骤（从 awaitingConfirmation → running）
-      if (reminderAction == '该烧水了' &&
-          parallel.status == StepStatus.awaitingConfirmation) {
+    if (parallel != null) {
+      // 并行烧水 awaitingConfirmation → 确认「该烧水了」
+      if (parallel.status == StepStatus.awaitingConfirmation) {
         ref.read(activeBatchesProvider.notifier)
             .confirmParallelStep(batch.id);
         return;
       }
-      // 「该上锅了」→ 烧水已完成，确认并行步骤并清理
-      if (reminderAction == '该上锅了' &&
-          parallel.status == StepStatus.done) {
+      // 并行烧水 done → 确认「该上锅了」
+      if (parallel.status == StepStatus.done) {
         ref.read(activeBatchesProvider.notifier)
             .confirmParallelStep(batch.id);
         return;
@@ -197,7 +195,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             ),
         ],
       ),
-      floatingActionButton: batches.length < 6 ? _startBtn(z) : null,
+      floatingActionButton: _hasCapacity(batches) ? _startBtn(z) : _fullBadge(z),
     );
   }
 
@@ -243,12 +241,34 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 onSetFermentationMinutes: (mins) => ref.read(activeBatchesProvider.notifier).setFermentationMinutes(b.id, mins),
                 onCancel: () => ref.read(activeBatchesProvider.notifier).cancelBatch(b.id),
                 onRestart: () => ref.read(activeBatchesProvider.notifier).restartBatch(b.id),
+                onDismiss: () => ref.read(activeBatchesProvider.notifier).removeCompletedBatch(b.id),
                 onSetPositionLabel: (label) => ref.read(activeBatchesProvider.notifier).setPositionLabel(b.id, label),
               ),
             );
           },
         );
       },
+    );
+  }
+
+  /// 只要有活跃批次且编号未满，就显示开始按钮
+  bool _hasCapacity(List<Batch> batches) {
+    final activeCount = batches.where((b) => b.status == BatchStatus.active).length;
+    return activeCount < 6;
+  }
+
+  /// 编号满时显示提示徽章
+  Widget _fullBadge(ZephyrSemantic z) {
+    return FloatingActionButton.extended(
+      onPressed: () {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('6 锅已满，完成或取消一锅后再开新的'), duration: Duration(seconds: 2)),
+        );
+      },
+      backgroundColor: z.bgMuted,
+      foregroundColor: z.textTertiary,
+      icon: const Icon(Icons.lock_outline, size: 20),
+      label: Text('已满 6 锅', style: TextStyle(fontSize: ZephyrFontSize.sm, fontWeight: FontWeight.w600)),
     );
   }
 

@@ -41,6 +41,8 @@ class MainActivity : FlutterActivity() {
     // P1-1: 语音识别器
     private var speechRecognizer: SpeechRecognizer? = null
     private var isListening = false
+    private var restartCount = 0
+    private val maxRestarts = 10  // 连续重启上限，超过后停止
 
     // P3-1: 原始亮度倍数（-1 = 跟随系统）
     private var originalBrightness: Float = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
@@ -145,9 +147,14 @@ class MainActivity : FlutterActivity() {
         when (keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP,
             KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                // 通知 Flutter 层
                 methodChannel?.invokeMethod("onKeyEvent", keyCode)
-                // 返回 true 拦截系统音量调节
+                return true
+            }
+            // 蓝牙 HID 遥控器常见按键
+            KeyEvent.KEYCODE_ENTER,           // 66 — 多数蓝牙自拍器
+            KeyEvent.KEYCODE_HEADSETHOOK,     // 79 — 耳机线控/部分蓝牙遥控
+            KeyEvent.KEYCODE_CALL -> {        // 5 — 部分蓝牙设备
+                methodChannel?.invokeMethod("onKeyEvent", keyCode)
                 return true
             }
         }
@@ -157,8 +164,10 @@ class MainActivity : FlutterActivity() {
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP,
-            KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                // 拦截音量键的默认行为
+            KeyEvent.KEYCODE_VOLUME_DOWN,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_HEADSETHOOK,
+            KeyEvent.KEYCODE_CALL -> {
                 return true
             }
         }
@@ -311,10 +320,18 @@ class MainActivity : FlutterActivity() {
             return
         }
 
-        // 检查录音权限
+        // 检查录音权限 — 无权限时请求而非直接失败
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1001)
+            // 权限结果回调中重新尝试
+            return
+        }
+
+        // 连续重启超限 → 通知 Flutter 停用语音
+        if (restartCount >= maxRestarts) {
             voiceChannel?.invokeMethod("onRecognitionFailed", null)
+            isListening = false
             return
         }
 
@@ -330,16 +347,19 @@ class MainActivity : FlutterActivity() {
 
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
+            override fun onBeginningOfSpeech() {
+                // 成功开始监听 → 重置重启计数
+                restartCount = 0
+            }
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
             override fun onError(error: Int) {
-                // 错误后自动重启监听（保持持续 KWS）
                 if (isListening) {
+                    restartCount++
                     speechRecognizer?.destroy()
                     speechRecognizer = null
-                    // 延迟 500ms 重启，避免频繁崩溃
+                    // 延迟 500ms 重启
                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                         if (isListening) startVoiceListening()
                     }, 500)
@@ -356,8 +376,8 @@ class MainActivity : FlutterActivity() {
                         voiceChannel?.invokeMethod("onRecognitionFailed", null)
                     }
                 }
-                // 识别完一组结果后自动重启
                 if (isListening) {
+                    restartCount++
                     speechRecognizer?.destroy()
                     speechRecognizer = null
                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -367,14 +387,13 @@ class MainActivity : FlutterActivity() {
             }
 
             override fun onPartialResults(partialResults: Bundle?) {
-                // 部分结果也尝试匹配，提高响应速度
                 val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 if (matches != null) {
                     val matchedCmd = matchVoiceCommand(matches)
                     if (matchedCmd >= 0) {
                         voiceChannel?.invokeMethod("onCommand", matchedCmd)
-                        // 匹配成功后重启
                         if (isListening) {
+                            restartCount++
                             speechRecognizer?.destroy()
                             speechRecognizer = null
                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -393,12 +412,14 @@ class MainActivity : FlutterActivity() {
 
     private fun stopVoiceListening() {
         isListening = false
+        restartCount = 0
         speechRecognizer?.stopListening()
         speechRecognizer?.destroy()
         speechRecognizer = null
     }
 
     /// 匹配语音指令 — 返回 VoiceCommand enum index（0-3），-1 = 未匹配
+    /// 单字「好」不触发，至少「好了」二字才匹配
     private fun matchVoiceCommand(matches: List<String>): Int {
         for (text in matches) {
             val lower = text.lowercase()
@@ -406,8 +427,8 @@ class MainActivity : FlutterActivity() {
             if (lower.contains("烧水") || lower.contains("烧开")) return 0
             // 1: startSteaming 「开始蒸」
             if (lower.contains("开始蒸") || lower.contains("上锅")) return 1
-            // 2: done 「好了」/「完成」/「确认」
-            if (lower.contains("好了") || lower.contains("完成") || lower.contains("确认") || lower.contains("好")) return 2
+            // 2: done 「好了」/「完成」/「确认」— 不匹配单字「好」
+            if (lower.contains("好了") || lower.contains("完成") || lower.contains("确认") || lower.contains("结束了")) return 2
             // 3: addTwoMinutes 「加两分钟」
             if (lower.contains("加两分钟") || lower.contains("加2分钟") || lower.contains("加二分钟")) return 3
         }
