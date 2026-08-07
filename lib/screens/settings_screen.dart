@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_tokens.dart';
 import '../providers/app_providers.dart';
+import '../services/weather_service.dart';
 import 'permission_checklist_screen.dart';
 import 'data_export_screen.dart';
 
@@ -58,6 +59,12 @@ class SettingsScreen extends ConsumerWidget {
                 () => ref.read(settingsProvider.notifier).toggleVoiceEnabled()),
 
             const SizedBox(height: ZephyrSpacing.s6),
+            _section(z, '天气'),
+            _nav(z, '和风天气 API Key', '配置后自动采集气温数据', Icons.cloud_outlined, () {
+              _showApiKeyDialog(context, z, ref);
+            }),
+
+            const SizedBox(height: ZephyrSpacing.s6),
             _section(z, '系统权限'),
             _nav(z, '权限检查清单', '通知、精确闹钟、电池优化等', Icons.checklist, () {
               Navigator.push(context, MaterialPageRoute(builder: (_) => const PermissionChecklistScreen()));
@@ -71,7 +78,7 @@ class SettingsScreen extends ConsumerWidget {
 
             const SizedBox(height: ZephyrSpacing.s6),
             _section(z, '关于'),
-            _info(z, '版本', '1.0.0 (V1+V2)'),
+            _info(z, '版本', '1.1.0 (V1+V2 审计修复)'),
             _info(z, '技术栈', 'Flutter 3.x + Drift + Riverpod'),
           ],
         ),
@@ -166,6 +173,56 @@ class SettingsScreen extends ConsumerWidget {
             Text(value, style: TextStyle(fontSize: ZephyrFontSize.sm, color: z.textTertiary)),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 和风天气 API Key 配置对话框
+  void _showApiKeyDialog(BuildContext context, ZephyrSemantic z, WidgetRef ref) {
+    final controller = TextEditingController();
+    WeatherService.instance.getApiKey().then((key) {
+      controller.text = key ?? '';
+    });
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: z.bgElevated,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ZephyrRadius.overlay)),
+        title: Text('和风天气 API Key', style: TextStyle(color: z.textPrimary, fontWeight: FontWeight.w600)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('在 dev.qweather.com 注册后获取 API Key，配置后发酵时自动采集气温。',
+                style: TextStyle(fontSize: 12, color: z.textSecondary)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              decoration: InputDecoration(
+                hintText: '输入 API Key',
+                hintStyle: TextStyle(color: z.textTertiary, fontSize: 14),
+                filled: true,
+                fillColor: z.bgMuted,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(ZephyrRadius.md),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+              style: TextStyle(color: z.textPrimary, fontSize: 14),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () async {
+              await WeatherService.instance.setApiKey(controller.text.trim());
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: Text('保存', style: TextStyle(color: z.accentPrimary, fontWeight: FontWeight.w700)),
+          ),
+        ],
       ),
     );
   }

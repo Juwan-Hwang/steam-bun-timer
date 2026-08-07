@@ -42,23 +42,27 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     voice.onCommand = (cmd) {
       _handleVoiceCommand(cmd);
     };
+    // 初始化语音引擎（如果设置中已开启）
+    VoiceCommandService.instance.initialize();
   }
 
   /// 触发源回调 — 确认当前最紧急的批次
   void _handleTrigger() {
+    // 始终先清除全屏提醒覆盖层
+    ref.read(activeReminderProvider.notifier).state = null;
+
     final batches = ref.read(activeBatchesProvider);
     if (batches.isEmpty) {
       ReminderManager.instance.stop();
       return;
     }
-    // 找到最紧急的批次
-    final sorted = _sortByUrgency(batches);
-    final mostUrgent = sorted.first;
 
-    // 如果有活跃提醒，先停止
+    // 如果有活跃提醒，先停止铃声
     if (ReminderManager.instance.isReminding) {
       ReminderManager.instance.stop().then((_) {
-        // 如果提醒对应的批次需要确认，则确认
+        // 停止后确认最紧急批次的当前工序
+        final sorted = _sortByUrgency(batches);
+        final mostUrgent = sorted.first;
         final step = mostUrgent.currentStep;
         if (step != null && (step.status == StepStatus.awaitingConfirmation ||
             step.status == StepStatus.evaluating)) {
@@ -69,6 +73,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     }
 
     // 没有活跃提醒时，确认当前工序
+    final sorted = _sortByUrgency(batches);
+    final mostUrgent = sorted.first;
     final step = mostUrgent.currentStep;
     if (step != null && step.node.requiresConfirmation) {
       ref.read(activeBatchesProvider.notifier).confirmCurrentStep(mostUrgent.id);
@@ -191,6 +197,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 onConfirm: () => ref.read(activeBatchesProvider.notifier).confirmCurrentStep(b.id),
                 onEvaluate: (result) => ref.read(activeBatchesProvider.notifier).evaluateFermentation(b.id, result),
                 onAdjustDuration: (delta) => ref.read(activeBatchesProvider.notifier).adjustDuration(b.id, delta),
+                onExtendFermentation: (mins) => ref.read(activeBatchesProvider.notifier).extendFermentation(b.id, mins),
                 onSetFermentationMinutes: (mins) => ref.read(activeBatchesProvider.notifier).setFermentationMinutes(b.id, mins),
                 onCancel: () => ref.read(activeBatchesProvider.notifier).cancelBatch(b.id),
                 onRestart: () => ref.read(activeBatchesProvider.notifier).restartBatch(b.id),

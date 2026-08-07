@@ -43,16 +43,20 @@ class MainActivity : FlutterActivity() {
                 "startForeground" -> {
                     val title = call.argument<String>("title") ?: "蒸馒头计时器"
                     val content = call.argument<String>("content") ?: "运行中"
-                    startForegroundNotification(title, content)
+                    TimerForegroundService.start(this, title, content)
+                    isForegroundActive = true
                     result.success(null)
                 }
                 "updateNotification" -> {
                     val content = call.argument<String>("content") ?: ""
-                    updateNotification(content)
+                    if (isForegroundActive) {
+                        TimerForegroundService.update(this, content)
+                    }
                     result.success(null)
                 }
                 "stopForeground" -> {
-                    stopForegroundNotification()
+                    TimerForegroundService.stop(this)
+                    isForegroundActive = false
                     result.success(null)
                 }
                 "scheduleAlarm" -> {
@@ -123,61 +127,23 @@ class MainActivity : FlutterActivity() {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  前台服务通知 — §5.1 保活
+    //  前台服务通知通道 — 保留用于通知通道创建
+    //  实际的前台服务由 TimerForegroundService 处理
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private fun startForegroundNotification(title: String, content: String) {
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-
-        // 创建通知通道
+    private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
                 "蒸馒头计时器",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "计时提醒通知"
-                setSound(null, null) // 提醒声音由 Flutter 层控制
+                setSound(null, null)
             }
             nm.createNotificationChannel(channel)
         }
-
-        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(content)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .build()
-
-        try {
-            nm.notify(NOTIFICATION_ID, notification)
-            isForegroundActive = true
-        } catch (e: SecurityException) {
-            // 通知权限未授予
-            Log.w("MainActivity", "通知权限未授予: ${e.message}")
-        }
-    }
-
-    private fun updateNotification(content: String) {
-        if (!isForegroundActive) return
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("蒸馒头计时器")
-            .setContentText(content)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .build()
-        try {
-            nm.notify(NOTIFICATION_ID, notification)
-        } catch (_: SecurityException) {}
-    }
-
-    private fun stopForegroundNotification() {
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.cancel(NOTIFICATION_ID)
-        isForegroundActive = false
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -322,8 +288,7 @@ class AlarmReceiver : BroadcastReceiver() {
         val notification = NotificationCompat.Builder(context, "steam_bun_alarm")
             .setContentTitle(title)
             .setContentText(body)
-            .setSmallIcon(android.R.drawable.ic_dialog_alarm)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)

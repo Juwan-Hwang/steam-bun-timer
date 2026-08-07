@@ -16,15 +16,12 @@ class ActiveBatchStorage {
 
   final _db = AppDatabase();
 
-  /// 保存/更新活跃批次状态
+  /// 保存/更新活跃批次状态 — 完整序列化所有字段
   Future<void> saveBatch(Batch batch) async {
-    final stepsJson = jsonEncode(batch.steps.map(_stepToJson).toList());
-
-    // 使用 shared_preferences 存储活跃批次（简单可靠）
-    // 这里用 raw SQL 方式直接写 kv 表更优雅
+    final json = jsonEncode(_batchToJson(batch));
     await _db.customStatement(
       'INSERT OR REPLACE INTO active_batch_kv (id, data) VALUES (?, ?)',
-      [batch.id, stepsJson],
+      [batch.id, json],
     );
   }
 
@@ -44,24 +41,8 @@ class ActiveBatchStorage {
       try {
         final id = row.read<String>('id');
         final data = row.read<String>('data');
-        final stepsJson = jsonDecode(data) as List<dynamic>;
-        final steps = stepsJson.map((j) => _stepFromJson(j as Map<String, dynamic>)).toList();
-
-        // 从 steps 重建 Recipe 引用
-        final recipe = Recipe.presets.firstWhere(
-          (r) => r.steps.any((s) => s.type == steps.first.node.type),
-          orElse: () => Recipe.presets.first,
-        );
-
-        batches.add(Batch.restore(
-          id: id,
-          displayNumber: 0, // 从数据中恢复
-          recipe: recipe,
-          currentStepIndex: 0,
-          status: BatchStatus.active,
-          startedAt: DateTime.now(),
-          steps: steps,
-        ));
+        final json = jsonDecode(data) as Map<String, dynamic>;
+        batches.add(_batchFromJson(id, json));
       } catch (_) {
         // 跳过损坏的记录
       }
@@ -69,11 +50,79 @@ class ActiveBatchStorage {
     return batches;
   }
 
+  // ── 完整序列化 — 不丢任何字段 ──
+
+  Map<String, dynamic> _batchToJson(Batch batch) {
+    return {
+      'recipeId': batch.recipe.id,
+      'displayNumber': batch.displayNumber,
+      'currentStepIndex': batch.currentStepIndex,
+      'status': batch.status.name,
+      'startedAt': batch.startedAt?.toIso8601String(),
+      'completedAt': batch.completedAt?.toIso8601String(),
+      'temperature': batch.temperature,
+      'humidity': batch.humidity,
+      'adjustmentMinutes': batch.adjustmentMinutes,
+      'positionLabel': batch.positionLabel,
+      'fermentationResult': batch.fermentationResult?.name,
+      'simmeringEnd': batch.simmeringEnd?.toIso8601String(),
+      'parallelStepType': batch.parallelStep?.node.type.name,
+      'parallelStepIsRunning': batch.parallelStep?.isParallelRunning,
+      'steps': batch.steps.map(_stepToJson).toList(),
+    };
+  }
+
+  Batch _batchFromJson(String id, Map<String, dynamic> j) {
+    final recipeId = j['recipeId'] as String? ?? 'white_bun';
+    final recipe = Recipe.presets.firstWhere(
+      (r) => r.id == recipeId,
+      orElse: () => Recipe.presets.first,
+    );
+
+    final stepsJson = j['steps'] as List<dynamic>;
+    final steps = stepsJson.map((s) => _stepFromJson(s as Map<String, dynamic>, recipe)).toList();
+
+    // 恢复并行步骤引用
+    StepRuntime? parallelStep;
+    final parallelType = j['parallelStepType'] as String?;
+    if (parallelType != null) {
+      final type = StepType.values.firstWhere(
+        (t) => t.name == parallelType,
+        orElse: () => StepType.boiling,
+      );
+      final idx = steps.indexWhere((s) => s.node.type == type);
+      if (idx >= 0) {
+        parallelStep = steps[idx];
+        parallelStep.isParallelRunning = j['parallelStepIsRunning'] as bool? ?? false;
+      }
+    }
+
+    return Batch.restore(
+      id: id,
+      displayNumber: j['displayNumber'] as int? ?? 0,
+      recipe: recipe,
+      currentStepIndex: j['currentStepIndex'] as int? ?? 0,
+      status: BatchStatus.values.firstWhere(
+        (s) => s.name == j['status'],
+        orElse: () => BatchStatus.active,
+      ),
+      startedAt: _parseDate(j['startedAt']) ?? DateTime.now(),
+      completedAt: _parseDate(j['completedAt']),
+      temperature: (j['temperature'] as num?)?.toDouble(),
+      humidity: j['humidity'] as int?,
+      adjustmentMinutes: j['adjustmentMinutes'] as int? ?? 0,
+      positionLabel: j['positionLabel'] as String?,
+      fermentationResult: _parseFermentationResult(j['fermentationResult']),
+      simmeringEnd: _parseDate(j['simmeringEnd']),
+      parallelStep: parallelStep,
+      steps: steps,
+    );
+  }
+
   Map<String, dynamic> _stepToJson(StepRuntime s) {
     return {
       'type': s.node.type.name,
       'label': s.node.label,
-      'defaultDuration': s.node.defaultDurationMinutes,
       'status': s.status.name,
       'plannedStart': s.plannedStart?.toIso8601String(),
       'plannedEnd': s.plannedEnd?.toIso8601String(),
@@ -87,14 +136,16 @@ class ActiveBatchStorage {
     };
   }
 
-  StepRuntime _stepFromJson(Map<String, dynamic> j) {
+  StepRuntime _stepFromJson(Map<String, dynamic> j, Recipe recipe) {
     final type = StepType.values.firstWhere(
       (t) => t.name == j['type'],
       orElse: () => StepType.fermentation,
     );
-    // 找到对应的 StepNode 定义
-    final node = _findStepNode(type, j['label'] as String) ??
-        StepNode(type: type, label: j['label'] as String, entryCondition: '', uiState: '');
+    // 从 Recipe 定义中找到对应的 StepNode（保持引用一致性）
+    final node = recipe.steps.firstWhere(
+      (s) => s.type == type,
+      orElse: () => StepNode(type: type, label: j['label'] as String? ?? '', entryCondition: '', uiState: ''),
+    );
 
     final s = StepRuntime(node: node);
     s.status = StepStatus.values.firstWhere(
@@ -113,13 +164,12 @@ class ActiveBatchStorage {
     return s;
   }
 
-  StepNode? _findStepNode(StepType type, String label) {
-    for (final r in Recipe.presets) {
-      for (final s in r.steps) {
-        if (s.type == type && s.label == label) return s;
-      }
-    }
-    return null;
+  FermentationResult? _parseFermentationResult(dynamic v) {
+    if (v == null) return null;
+    return FermentationResult.values.firstWhere(
+      (r) => r.name == v,
+      orElse: () => FermentationResult.perfect,
+    );
   }
 
   DateTime? _parseDate(dynamic v) {

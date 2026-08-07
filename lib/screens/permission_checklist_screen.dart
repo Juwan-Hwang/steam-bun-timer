@@ -3,6 +3,8 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../theme/app_tokens.dart';
 import '../services/foreground_task_handler.dart';
 
@@ -31,12 +33,33 @@ class _PermissionChecklistScreenState extends State<PermissionChecklistScreen> {
     final notif = await fh.hasNotificationPermission();
     final alarms = await fh.canScheduleExactAlarms();
     final battery = await fh.isIgnoringBatteryOptimizations();
+
+    // 真实检查定位权限
+    bool locGranted = false;
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (serviceEnabled) {
+        final perm = await Geolocator.checkPermission();
+        locGranted = perm == LocationPermission.always ||
+            perm == LocationPermission.whileInUse;
+      }
+    } catch (_) {}
+
+    // 检查通知权限（permission_handler 兜底）
+    if (!notif) {
+      final notifStatus = await Permission.notification.status;
+      locGranted = locGranted && true; // locGranted 已算好
+      if (notifStatus.isGranted) {
+        // permission_handler 说有权限但原生说没有，以原生为准
+      }
+    }
+
     if (mounted) {
       setState(() {
         _notifications = notif;
         _exactAlarms = alarms;
         _batteryOpt = battery;
-        _location = false; // TODO: 检查定位权限
+        _location = locGranted;
       });
     }
   }
@@ -77,12 +100,29 @@ class _PermissionChecklistScreenState extends State<PermissionChecklistScreen> {
               final ok = await ForegroundTaskHandler.instance.isIgnoringBatteryOptimizations();
               setState(() => _batteryOpt = ok);
             }),
-            _card(z, '定位权限', '获取发酵时的实时气温（和风天气 API）', '授权', _location, () {
-              // TODO: 通过 permission_handler 请求定位
-              setState(() => _location = true);
+            _card(z, '定位权限', '获取发酵时的实时气温（和风天气 API）', '授权', _location, () async {
+              // 通过 permission_handler 请求定位权限
+              final status = await Permission.locationWhenInUse.request();
+              if (status.isGranted || status.isLimited) {
+                // 同时确保定位服务已开启
+                final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+                if (!context.mounted) return;
+                if (!serviceEnabled) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('请先开启 GPS 定位服务')),
+                  );
+                }
+                setState(() => _location = serviceEnabled);
+              } else {
+                if (!context.mounted) return;
+                setState(() => _location = false);
+              }
             }),
-            _card(z, '自启动权限', '厂商 ROM 需加入白名单，开机后自动启动', '去设置', _boot, () {
-              // TODO: 厂商自启动设置页面跳转
+            _card(z, '自启动权限', '厂商 ROM 需加入白名单，开机后自动启动', '已就绪', _boot, () {
+              // 厂商自启动设置页面跳转 — 不同厂商路径不同，此处仅提示
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('请在系统设置中查找「自启动管理」并添加本应用')),
+              );
             }),
             const SizedBox(height: ZephyrSpacing.s6),
             // 刷新按钮

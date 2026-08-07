@@ -1,17 +1,19 @@
 /// 提醒管理器 — §5.2 提醒强度
-/// 最大音量铃声 + 川话语音播报 + 屏幕整屏变红大字闪烁
+/// 录音优先播报(缺失时 TTS 降级) + 振动 + 屏幕整屏变红大字闪烁
 /// 直到确认才停止
 library;
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:vibration/vibration.dart';
 import 'announcement_player.dart';
 
 /// 提醒级别
 enum ReminderLevel {
-  /// 动作节点 — 最大音量铃声 + 语音播报 + 红色闪烁
+  /// 动作节点 — TTS 循环播报 + 振动 + 红色闪烁
   action,
-  /// 焖制轻提示 — 一声轻提示，非循环
+  /// 焖制轻提示 — 一声播报，非循环
   simmeringHint,
   /// 间歇提醒 — 每 30 秒一次
   intermittent,
@@ -39,7 +41,7 @@ class ReminderManager {
   ReminderManager._();
   static final instance = ReminderManager._();
 
-  final _audioPlayer = AudioPlayer();
+  final AudioPlayer _alarmPlayer = AudioPlayer();
 
   /// 当前活跃的提醒
   ReminderRequest? _activeReminder;
@@ -47,6 +49,9 @@ class ReminderManager {
 
   /// 是否正在提醒
   bool get isReminding => _activeReminder != null;
+
+  /// 循环播报定时器
+  Timer? _loopTimer;
 
   /// 停止提醒回调（由 UI 层设置）
   VoidCallback? onReminderStop;
@@ -61,44 +66,83 @@ class ReminderManager {
 
     _activeReminder = request;
 
-    // 播放川话语音播报
+    // 播放语音播报（录音优先，TTS 兜底）
     await _playAnnouncement(request);
 
-    // 动作节点级别：循环播放铃声
+    // 动作节点级别：循环铃声 + 振动
     if (request.level == ReminderLevel.action) {
-      await _audioPlayer.setReleaseMode(ReleaseMode.loop);
-      await _audioPlayer.setVolume(1.0);
-      // 铃声文件路径 — 需放入 assets/audio/
-      try {
-        await _audioPlayer.play(AssetSource('audio/alarm.mp3'));
-      } catch (_) {
-        // 音频文件不存在时静默降级
-      }
+      _playAlarmLoop();
+      _vibratePattern();
+      // 每 8 秒重新播报语音
+      _loopTimer?.cancel();
+      _loopTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+        _playAnnouncement(request);
+        _vibratePattern();
+      });
     } else if (request.level == ReminderLevel.intermittent) {
-      // 间歇提醒 — 播一次
-      await _audioPlayer.setReleaseMode(ReleaseMode.release);
-      try {
-        await _audioPlayer.play(AssetSource('audio/beep.mp3'));
-      } catch (_) {}
+      // 间歇提醒 — 播一次铃声 + 轻振动
+      _playBeep();
+      _vibrateOnce();
     }
-    // simmeringHint 只播语音，不加铃声
+    // simmeringHint 只播语音，不加铃声/振动
   }
 
   /// 停止所有提醒
   Future<void> stop() async {
-    await _audioPlayer.stop();
+    _loopTimer?.cancel();
+    _loopTimer = null;
+    try { await _alarmPlayer.stop(); } catch (_) {}
+    await AnnouncementPlayer.instance.stop();
     _activeReminder = null;
     onReminderStop?.call();
   }
 
-  /// 播放川话语音播报
+  /// 播放语音播报
   Future<void> _playAnnouncement(ReminderRequest request) async {
-    final player = AnnouncementPlayer();
-    await player.play(AnnouncementRequest(
+    await AnnouncementPlayer.instance.play(AnnouncementRequest(
       number: request.batchNumber,
       recipeId: request.recipeId,
       actionText: request.actionText,
     ));
+  }
+
+  /// 循环播放铃声 — 录音文件缺失时仅靠振动
+  Future<void> _playAlarmLoop() async {
+    try {
+      await _alarmPlayer.setReleaseMode(ReleaseMode.loop);
+      await _alarmPlayer.setVolume(1.0);
+      await _alarmPlayer.play(AssetSource('audio/alarm.mp3'));
+    } catch (_) {
+      // 铃声文件不存在，振动兜底已由 _vibratePattern 处理
+    }
+  }
+
+  /// 单声提示音 — 录音文件缺失时静默
+  Future<void> _playBeep() async {
+    try {
+      await _alarmPlayer.setReleaseMode(ReleaseMode.release);
+      await _alarmPlayer.play(AssetSource('audio/beep.mp3'));
+    } catch (_) {}
+  }
+
+  /// 振动模式 — 长振动 + 短暂停 + 长振动
+  Future<void> _vibratePattern() async {
+    try {
+      final hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator == true) {
+        Vibration.vibrate(pattern: [800, 400, 800]);
+      }
+    } catch (_) {}
+  }
+
+  /// 单次振动
+  Future<void> _vibrateOnce() async {
+    try {
+      final hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator == true) {
+        Vibration.vibrate(duration: 300);
+      }
+    } catch (_) {}
   }
 }
 

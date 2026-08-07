@@ -1,5 +1,8 @@
 allprojects {
     repositories {
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/central") }
+        maven { url = uri("https://maven.aliyun.com/repository/public") }
         google()
         mavenCentral()
     }
@@ -17,6 +20,15 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(":app")
+    if (project.path != ":app") {
+        project.afterEvaluate {
+            if (project.plugins.hasPlugin("com.android.library")) {
+                project.extensions.configure<com.android.build.gradle.LibraryExtension>("android") {
+                    compileSdk = 36
+                }
+            }
+        }
+    }
 }
 
 tasks.register<Delete>("clean") {

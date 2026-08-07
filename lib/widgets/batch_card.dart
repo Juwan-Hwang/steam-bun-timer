@@ -20,6 +20,7 @@ class BatchCard extends StatefulWidget {
   final VoidCallback? onCancel;
   final void Function(FermentationResult)? onEvaluate;
   final void Function(int)? onAdjustDuration;
+  final void Function(int)? onExtendFermentation;
   final void Function(int)? onSetFermentationMinutes;
   final VoidCallback? onRestart; // 饼子「再来一锅」
   final void Function(String)? onSetPositionLabel;
@@ -31,6 +32,7 @@ class BatchCard extends StatefulWidget {
     this.onCancel,
     this.onEvaluate,
     this.onAdjustDuration,
+    this.onExtendFermentation,
     this.onSetFermentationMinutes,
     this.onRestart,
     this.onSetPositionLabel,
@@ -405,9 +407,9 @@ class _BatchCardState extends State<BatchCard>
           children: [
             Text('续时中', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w300, color: z.textPrimary)),
             const Spacer(),
-            _adjustBtn(z, '+1', 1),
+            _extendBtn(z, '+1', 1),
             const SizedBox(width: 4),
-            _adjustBtn(z, '+5', 5),
+            _extendBtn(z, '+5', 5),
           ],
         ),
         if (s.extendedMinutes > 0)
@@ -419,6 +421,28 @@ class _BatchCardState extends State<BatchCard>
             ),
           ),
       ],
+    );
+  }
+
+  /// 续时按钮 — 调用 onExtendFermentation 而非 onAdjustDuration
+  Widget _extendBtn(ZephyrSemantic z, String label, int minutes) {
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.lightImpact();
+        widget.onExtendFermentation?.call(minutes);
+      },
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: z.warning.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(ZephyrRadius.control),
+          border: Border.all(color: z.warning.withValues(alpha: 0.3)),
+        ),
+        child: Center(
+          child: Text(label, style: TextStyle(fontSize: ZephyrFontSize.lg, fontWeight: FontWeight.w700, color: z.warning)),
+        ),
+      ),
     );
   }
 

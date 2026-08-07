@@ -166,7 +166,7 @@ class Batch {
     return batch;
   }
 
-  /// 从持久化数据恢复批次
+  /// 从持久化数据恢复批次 — 完整恢复所有字段
   factory Batch.restore({
     required String id,
     required int displayNumber,
@@ -176,10 +176,15 @@ class Batch {
     required DateTime startedAt,
     DateTime? completedAt,
     double? temperature,
+    int? humidity,
+    int adjustmentMinutes = 0,
     String? positionLabel,
+    FermentationResult? fermentationResult,
+    DateTime? simmeringEnd,
+    StepRuntime? parallelStep,
     required List<StepRuntime> steps,
   }) {
-    return Batch(
+    final batch = Batch(
       id: id,
       displayNumber: displayNumber,
       recipe: recipe,
@@ -191,5 +196,11 @@ class Batch {
       positionLabel: positionLabel,
       currentStepIndex: currentStepIndex,
     );
+    batch.humidity = humidity;
+    batch.adjustmentMinutes = adjustmentMinutes;
+    batch.fermentationResult = fermentationResult;
+    batch.simmeringEnd = simmeringEnd;
+    batch.parallelStep = parallelStep;
+    return batch;
   }
 }

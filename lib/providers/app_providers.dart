@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:drift/drift.dart' hide Batch;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/recipe.dart';
 import '../models/batch.dart';
 import '../utils/number_pool.dart';
@@ -17,8 +18,9 @@ import '../services/batch_persistence.dart';
 import '../services/reminder_manager.dart';
 import '../services/foreground_task_handler.dart';
 import '../services/screen_controller.dart';
+import '../services/voice_command_service.dart';
 
-/// 设置 Provider
+/// 设置 Provider — 持久化到 SharedPreferences
 final settingsProvider = StateNotifierProvider<SettingsNotifier, AppSettings>((ref) {
   return SettingsNotifier();
 });
@@ -57,29 +59,81 @@ class AppSettings {
       voiceEnabled: voiceEnabled ?? this.voiceEnabled,
     );
   }
+
+  /// 从 SharedPreferences 加载
+  static Future<AppSettings> fromPrefs(SharedPreferences prefs) async {
+    return AppSettings(
+      screenAlwaysOn: prefs.getBool('screenAlwaysOn') ?? true,
+      autoDimBrightness: prefs.getBool('autoDimBrightness') ?? true,
+      burnInProtection: prefs.getBool('burnInProtection') ?? true,
+      simmeringReminder: prefs.getBool('simmeringReminder') ?? true,
+      chargingProtection: prefs.getBool('chargingProtection') ?? false,
+      voiceEnabled: prefs.getBool('voiceEnabled') ?? false,
+    );
+  }
 }
 
 class SettingsNotifier extends StateNotifier<AppSettings> {
-  SettingsNotifier() : super(const AppSettings());
+  SharedPreferences? _prefs;
+
+  SettingsNotifier() : super(const AppSettings()) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    _prefs = await SharedPreferences.getInstance();
+    state = await AppSettings.fromPrefs(_prefs!);
+    // 同步屏幕控制器状态
+    await ScreenController.instance.setAlwaysOn(state.screenAlwaysOn);
+    ScreenController.instance.setAutoDim(state.autoDimBrightness);
+    ScreenController.instance.setBurnInProtection(state.burnInProtection);
+    // 如果语音已开启，启动 KWS
+    if (state.voiceEnabled) {
+      await VoiceCommandService.instance.enable();
+    }
+  }
+
+  Future<void> _save(String key, bool value) async {
+    await _prefs?.setBool(key, value);
+  }
 
   void toggleScreenAlwaysOn() {
     state = state.copyWith(screenAlwaysOn: !state.screenAlwaysOn);
     ScreenController.instance.setAlwaysOn(state.screenAlwaysOn);
+    _save('screenAlwaysOn', state.screenAlwaysOn);
   }
 
   void toggleAutoDim() {
     state = state.copyWith(autoDimBrightness: !state.autoDimBrightness);
     ScreenController.instance.setAutoDim(state.autoDimBrightness);
+    _save('autoDimBrightness', state.autoDimBrightness);
   }
 
   void toggleBurnInProtection() {
     state = state.copyWith(burnInProtection: !state.burnInProtection);
     ScreenController.instance.setBurnInProtection(state.burnInProtection);
+    _save('burnInProtection', state.burnInProtection);
   }
 
-  void toggleSimmeringReminder() => state = state.copyWith(simmeringReminder: !state.simmeringReminder);
-  void toggleChargingProtection() => state = state.copyWith(chargingProtection: !state.chargingProtection);
-  void toggleVoiceEnabled() => state = state.copyWith(voiceEnabled: !state.voiceEnabled);
+  void toggleSimmeringReminder() {
+    state = state.copyWith(simmeringReminder: !state.simmeringReminder);
+    _save('simmeringReminder', state.simmeringReminder);
+  }
+
+  void toggleChargingProtection() {
+    state = state.copyWith(chargingProtection: !state.chargingProtection);
+    _save('chargingProtection', state.chargingProtection);
+  }
+
+  void toggleVoiceEnabled() {
+    state = state.copyWith(voiceEnabled: !state.voiceEnabled);
+    _save('voiceEnabled', state.voiceEnabled);
+    if (state.voiceEnabled) {
+      VoiceCommandService.instance.enable();
+    } else {
+      VoiceCommandService.instance.disable();
+    }
+  }
 }
 
 /// 编号池
@@ -226,6 +280,9 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     // 异步获取气温 — §4.5
     _fetchWeather(batch.id);
 
+    // 启动前台服务 — §5.1 保活
+    _startForegroundIfNeeded();
+
     state = [...state, batch];
     _persistBatch(batch);
     return batch;
@@ -245,10 +302,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     current.actualConfirm = DateTime.now();
     current.status = StepStatus.done;
 
-    // 记录行为数据：提醒→确认间隔
-    if (current.reminderSentAt != null) {
-      _recordReminderDelay(batch, current);
-    }
+    // 提醒→确认间隔在 _saveBatchRecord 中通过 reminderSentAt/actualConfirm 计算
 
     // 推进到下一步
     _advanceToNext(batch, idx);
@@ -371,6 +425,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     ref.read(numberPoolProvider).release(batch.displayNumber);
     ActiveBatchStorage.instance.removeBatch(batchId);
     state = List.from(state)..removeAt(idx);
+    _stopForegroundIfIdle();
   }
 
   /// 完成批次后移除
@@ -381,6 +436,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     ref.read(numberPoolProvider).release(batch.displayNumber);
     ActiveBatchStorage.instance.removeBatch(batchId);
     state = List.from(state)..removeAt(idx);
+    _stopForegroundIfIdle();
   }
 
   /// 饼子「再来一锅」— §6
@@ -428,6 +484,18 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       batch.currentStepIndex++;
       final next = batch.currentStep!;
 
+      // 如果该步骤已作为并行步骤启动（如烧水在发酵尾部已并行），
+      // 不重置已有时间戳，直接切换为 running 状态
+      if (next.actualStart != null &&
+          (next.status == StepStatus.awaitingConfirmation ||
+           next.isParallelRunning)) {
+        // 清理并行标记 — 交接后不再是并行
+        next.isParallelRunning = false;
+        next.status = StepStatus.running;
+        // plannedEnd 已在并行启动时设置，保留不动
+        return;
+      }
+
       // 根据工序类型设置初始状态
       switch (next.node.type) {
         case StepType.simmering:
@@ -458,6 +526,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       batch.status = BatchStatus.completed;
       batch.completedAt = DateTime.now();
       _saveBatchRecord(batch);
+      // 无活跃批次时停止前台服务
+      _stopForegroundIfIdle();
     }
   }
 
@@ -527,10 +597,20 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     ReminderManager.instance.start(req);
   }
 
-  /// 记录行为数据：提醒→确认间隔
-  void _recordReminderDelay(Batch batch, StepRuntime step) {
-    // 存入 step 的 reminderSentAt → actualConfirm 间隔
-    // 在 _saveBatchRecord 中写入数据库
+  /// 启动前台服务（如果尚未启动）
+  void _startForegroundIfNeeded() {
+    ForegroundTaskHandler.instance.startForegroundService(
+      title: '蒸馒头计时器',
+      content: '${state.length + 1} 个批次运行中',
+    );
+  }
+
+  /// 无活跃批次时停止前台服务
+  void _stopForegroundIfIdle() {
+    final active = state.where((b) => b.status == BatchStatus.active).toList();
+    if (active.isEmpty) {
+      ForegroundTaskHandler.instance.stopForegroundService();
+    }
   }
 
   /// 更新前台服务通知
