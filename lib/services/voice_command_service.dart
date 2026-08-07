@@ -62,7 +62,10 @@ class VoiceCommandService {
             final cmdIndex = call.arguments as int;
             final cmd = VoiceCommand.values[cmdIndex];
             onCommand?.call(cmd);
+          case 'onListeningStarted':
+            _isEnabled = true;
           case 'onRecognitionFailed':
+            _isEnabled = false;
             await _vibrateTwice();
             onRecognitionFailed?.call();
         }
@@ -82,8 +85,11 @@ class VoiceCommandService {
       if (!ok) return;
     }
     try {
-      await _channel.invokeMethod('startListening');
-      _isEnabled = true;
+      final started = await _channel.invokeMethod<bool>('startListening') ?? false;
+      if (started) {
+        _isEnabled = true;
+      }
+      // started == false → 权限请求中，等待 onListeningStarted / onRecognitionFailed 回调
     } catch (_) {}
   }
 

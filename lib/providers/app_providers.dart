@@ -224,10 +224,40 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
           batch.simmeringEnd != null) {
         if (DateTime.now().isAfter(batch.simmeringEnd!)) {
           final settings = ref.read(settingsProvider);
+          step.status = StepStatus.done;
+          step.reminderSentAt ??= DateTime.now();
           if (settings.simmeringReminder) {
             _triggerSimmeringHint(batch);
           }
           batch.simmeringEnd = null; // 只提醒一次
+          changed = true;
+        }
+      }
+
+      // 5.5. 检查蒸制倒计时到点 → 「该关火了」
+      if (step.node.type == StepType.steaming &&
+          step.status == StepStatus.running) {
+        final remain = step.remainingSeconds;
+        if (remain != null && remain <= 0) {
+          step.status = StepStatus.done;
+          step.reminderSentAt ??= DateTime.now();
+          _triggerReminder(batch, '该关火了');
+          changed = true;
+        }
+      }
+
+      // 5.6. 检查翻面/出锅倒计时到点（饼子流程）
+      if ((step.node.type == StepType.flipping ||
+           step.node.type == StepType.plateOut) &&
+          step.status == StepStatus.running) {
+        final remain = step.remainingSeconds;
+        if (remain != null && remain <= 0) {
+          step.status = StepStatus.done;
+          step.reminderSentAt ??= DateTime.now();
+          final nextIdx = batch.currentStepIndex + 1;
+          if (nextIdx < batch.steps.length) {
+            _triggerReminder(batch, batch.steps[nextIdx].node.announcementAction ?? '');
+          }
           changed = true;
         }
       }
@@ -294,9 +324,13 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     ReminderManager.instance.stop();
 
     if (parallel.status == StepStatus.awaitingConfirmation) {
-      // 「该烧水了」→ 开始烧水
+      // 「该烧水了」→ 开始烧水，倒计时从确认时刻起算
       parallel.status = StepStatus.running;
-      // actualStart 已在 _triggerParallelBoiling 中设置
+      parallel.actualStart = DateTime.now();
+      parallel.plannedStart = DateTime.now();
+      parallel.plannedEnd = DateTime.now().add(
+        Duration(minutes: parallel.node.defaultDurationMinutes ?? 5),
+      );
     } else if (parallel.status == StepStatus.done) {
       // 「该上锅了」→ 烧水已完成
       parallel.actualConfirm = DateTime.now();
@@ -312,6 +346,10 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   }
 
   /// 确认当前工序动作节点
+  ///
+  /// 两阶段确认：
+  ///   awaitingConfirmation → running（开始倒计时）
+  ///   done → 推进到下一步（完成确认）
   void confirmCurrentStep(String batchId) {
     final idx = state.indexWhere((b) => b.id == batchId);
     if (idx == -1) return;
@@ -322,13 +360,23 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     // 停止提醒
     ReminderManager.instance.stop();
 
-    current.actualConfirm = DateTime.now();
-    current.status = StepStatus.done;
+    if (current.status == StepStatus.awaitingConfirmation) {
+      // 首次确认 → 开始倒计时
+      current.actualStart = DateTime.now();
+      current.plannedStart = DateTime.now();
+      if (current.node.defaultDurationMinutes != null) {
+        current.plannedEnd = DateTime.now().add(
+          Duration(minutes: current.node.defaultDurationMinutes!),
+        );
+      }
+      current.status = StepStatus.running;
+    } else if (current.status == StepStatus.done) {
+      // 倒计时已结束 → 确认完成并推进
+      current.actualConfirm = DateTime.now();
+      _advanceToNext(batch, idx);
+    }
+    // running / evaluating / extending / simmering → 不响应
 
-    // 提醒→确认间隔在 _saveBatchRecord 中通过 reminderSentAt/actualConfirm 计算
-
-    // 推进到下一步
-    _advanceToNext(batch, idx);
     state = List.of(state);
     _persistBatch(batch);
   }
@@ -439,6 +487,11 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     final idx = state.indexWhere((b) => b.id == batchId);
     if (idx == -1) return;
     final batch = state[idx];
+
+    // 停止所有提醒 — 防止删除后仍在循环播报
+    ReminderManager.instance.stop();
+    ref.read(activeReminderProvider.notifier).state = null;
+
     batch.status = BatchStatus.cancelled;
     batch.completedAt = DateTime.now();
 
@@ -456,6 +509,11 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     final idx = state.indexWhere((b) => b.id == batchId);
     if (idx == -1) return;
     final batch = state[idx];
+
+    // 停止所有提醒
+    ReminderManager.instance.stop();
+    ref.read(activeReminderProvider.notifier).state = null;
+
     ref.read(numberPoolProvider).release(batch.displayNumber);
     ActiveBatchStorage.instance.removeBatch(batchId);
     state = List.from(state)..removeAt(idx);
@@ -467,6 +525,11 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     final idx = state.indexWhere((b) => b.id == batchId);
     if (idx == -1) return;
     final oldBatch = state[idx];
+
+    // 停止所有提醒
+    ReminderManager.instance.stop();
+    ref.read(activeReminderProvider.notifier).state = null;
+
     // 完成旧批次
     oldBatch.status = BatchStatus.completed;
     oldBatch.completedAt = DateTime.now();
@@ -511,28 +574,29 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       }
 
       // 如果该步骤已作为并行步骤启动（如烧水在发酵尾部已并行），
-      // 不重置已有时间戳，直接切换为 running 状态
-      if (next.actualStart != null &&
-          (next.status == StepStatus.awaitingConfirmation ||
-           next.isParallelRunning)) {
-        // 清理并行标记 — 交接后不再是并行
+      // 交接后保持当前状态不变：
+      //   awaitingConfirmation → 用户仍需点击「已开始烧水」
+      //   running → 倒计时已在进行中（actualStart/plannedEnd 已在 confirmParallelStep 设置）
+      if (next.isParallelRunning) {
         next.isParallelRunning = false;
-        next.status = StepStatus.running;
-        // plannedEnd 已在并行启动时设置，保留不动
+        batch.parallelStep = null;
         return;
       }
 
       // 根据工序类型设置初始状态
       switch (next.node.type) {
+        case StepType.steaming:
+          // 蒸制 — 等待用户确认「已开始蒸」后才开始倒计时
+          next.status = StepStatus.awaitingConfirmation;
+          next.actualStart = DateTime.now();
         case StepType.simmering:
           // 焖制 — 进入静默计时，5 分钟后轻提示
+          // 「该关火了」已在蒸制倒计时结束时触发，此处不重复
           next.status = StepStatus.simmering;
           next.actualStart = DateTime.now();
           batch.simmeringEnd = DateTime.now().add(
             Duration(minutes: next.node.defaultDurationMinutes ?? 5),
           );
-          // 播报「该关火了」
-          _triggerReminder(batch, '该关火了');
         case StepType.uncover:
           // 揭锅 — 等待确认
           next.status = StepStatus.awaitingConfirmation;
@@ -560,14 +624,12 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   }
 
   /// 触发并行烧水 — §1.3
+  ///
+  /// 仅设置 awaitingConfirmation 状态，不预设 plannedEnd——
+  /// 倒计时在用户点击「已开始烧水」后才启动。
   void _triggerParallelBoiling(Batch batch, StepRuntime boilingStep) {
     boilingStep.isParallelRunning = true;
     boilingStep.status = StepStatus.awaitingConfirmation;
-    boilingStep.actualStart = DateTime.now();
-    boilingStep.plannedStart = DateTime.now();
-    boilingStep.plannedEnd = DateTime.now().add(
-      Duration(minutes: boilingStep.node.defaultDurationMinutes ?? 5),
-    );
     boilingStep.reminderSentAt = DateTime.now();
     batch.parallelStep = boilingStep;
 

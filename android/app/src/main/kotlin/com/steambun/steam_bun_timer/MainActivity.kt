@@ -126,8 +126,8 @@ class MainActivity : FlutterActivity() {
                     result.success(available)
                 }
                 "startListening" -> {
-                    startVoiceListening()
-                    result.success(null)
+                    val started = startVoiceListening()
+                    result.success(started)
                 }
                 "stopListening" -> {
                     stopVoiceListening()
@@ -153,7 +153,9 @@ class MainActivity : FlutterActivity() {
             // 蓝牙 HID 遥控器常见按键
             KeyEvent.KEYCODE_ENTER,           // 66 — 多数蓝牙自拍器
             KeyEvent.KEYCODE_HEADSETHOOK,     // 79 — 耳机线控/部分蓝牙遥控
-            KeyEvent.KEYCODE_CALL -> {        // 5 — 部分蓝牙设备
+            KeyEvent.KEYCODE_CALL,            // 5  — 部分蓝牙设备
+            KeyEvent.KEYCODE_DPAD_CENTER,     // 23 — 部分蓝牙遥控/车载设备
+            KeyEvent.KEYCODE_CAMERA -> {      // 27 — 蓝牙相机快门
                 methodChannel?.invokeMethod("onKeyEvent", keyCode)
                 return true
             }
@@ -167,7 +169,9 @@ class MainActivity : FlutterActivity() {
             KeyEvent.KEYCODE_VOLUME_DOWN,
             KeyEvent.KEYCODE_ENTER,
             KeyEvent.KEYCODE_HEADSETHOOK,
-            KeyEvent.KEYCODE_CALL -> {
+            KeyEvent.KEYCODE_CALL,
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_CAMERA -> {
                 return true
             }
         }
@@ -313,11 +317,11 @@ class MainActivity : FlutterActivity() {
     //  使用系统语音识别做轻量 KWS，识别结果匹配关键词后回调 Flutter
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private fun startVoiceListening() {
-        if (isListening) return
+    private fun startVoiceListening(): Boolean {
+        if (isListening) return true
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             voiceChannel?.invokeMethod("onRecognitionFailed", null)
-            return
+            return false
         }
 
         // 检查录音权限 — 无权限时请求而非直接失败
@@ -325,18 +329,19 @@ class MainActivity : FlutterActivity() {
             != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1001)
             // 权限结果回调中重新尝试
-            return
+            return false
         }
 
         // 连续重启超限 → 通知 Flutter 停用语音
         if (restartCount >= maxRestarts) {
             voiceChannel?.invokeMethod("onRecognitionFailed", null)
             isListening = false
-            return
+            return false
         }
 
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         isListening = true
+        voiceChannel?.invokeMethod("onListeningStarted", null)
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -408,6 +413,24 @@ class MainActivity : FlutterActivity() {
         })
 
         speechRecognizer?.startListening(intent)
+        return true
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1001) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                // 权限授予 → 重新启动监听
+                val started = startVoiceListening()
+                if (!started) {
+                    // 权限已授予但仍未启动（如重启超限）
+                    voiceChannel?.invokeMethod("onRecognitionFailed", null)
+                }
+            } else {
+                // 权限拒绝 → 通知 Flutter
+                voiceChannel?.invokeMethod("onRecognitionFailed", null)
+            }
+        }
     }
 
     private fun stopVoiceListening() {

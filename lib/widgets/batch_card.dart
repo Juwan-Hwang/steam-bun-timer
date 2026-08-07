@@ -473,10 +473,12 @@ class _BatchCardState extends State<BatchCard>
   // ── 操作按钮 ≥72dp ──
   bool _shouldShowAction(StepRuntime? s) {
     if (s == null) return false;
-    if (!s.node.requiresConfirmation) return false;
+    // 仅在需要用户操作时显示按钮：
+    //   awaitingConfirmation → 首次确认（开始倒计时）
+    //   done → 完成确认（推进下一步）
+    // running / simmering / evaluating / extending → 不显示
     return s.status == StepStatus.awaitingConfirmation ||
-           s.status == StepStatus.running ||
-           s.status == StepStatus.simmering;
+           s.status == StepStatus.done;
   }
 
   /// P0-3: 并行烧水步骤是否需要显示确认按钮
@@ -537,9 +539,11 @@ class _BatchCardState extends State<BatchCard>
       case StepType.boiling:
         return '已开始烧水';
       case StepType.steaming:
-        return '已开始蒸';
+        // awaitingConfirmation → 首次确认「已开始蒸」
+        // done → 倒计时结束「已关火」
+        return s.status == StepStatus.done ? '已关火' : '已开始蒸';
       case StepType.simmering:
-        return '已关火';
+        return '揭锅';
       case StepType.uncover:
         return '揭锅';
       case StepType.flipping:

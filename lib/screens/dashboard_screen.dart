@@ -107,9 +107,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       }
     }
 
-    // 默认：确认当前工序（仅当需要确认时）
+    // 默认：确认当前工序（仅在需要用户操作时响应）
     if (step.status == StepStatus.awaitingConfirmation ||
-        (step.node.requiresConfirmation && step.status == StepStatus.running)) {
+        step.status == StepStatus.done) {
       ref.read(activeBatchesProvider.notifier).confirmCurrentStep(batch.id);
     }
   }

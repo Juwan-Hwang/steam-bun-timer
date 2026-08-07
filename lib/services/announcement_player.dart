@@ -106,9 +106,19 @@ class AnnouncementPlayer {
   /// 最新的播报请求 — _isPlaying 时 play() 被跳过，用此字段补播
   AnnouncementRequest? _latestReq;
 
+  /// stop() 标志 — 防止 stop 后仍触发 TTS 兜底或补播
+  bool _stopped = false;
+
   /// 播放一条完整的播报
+  ///
+  /// 如果当前正在播放，只记录 _latestReq 不入队——
+  /// 避免新请求的分段与当前队列混排，且防止 _processQueue 结束时
+  /// 补播已经入队并消费过的请求导致重复播报。
   Future<void> play(AnnouncementRequest req) async {
+    _stopped = false;
     _latestReq = req;
+    if (_isPlaying) return; // 正在播放 → 仅记录最新请求，待当前队列播完后补播
+
     final segments = <String>[];
     final n = AnnouncementCatalog.getNumber(req.number);
     final v = AnnouncementCatalog.getVariety(req.recipeId);
@@ -123,34 +133,30 @@ class AnnouncementPlayer {
   }
 
   /// 依次播放队列中的音频段；某段播放失败时切换到 TTS 兜底
+  ///
+  /// _stopped 标志贯穿全程：stop() 调用后会中断 while 循环、
+  /// 跳过 TTS 兜底、跳过补播——防止「确认时 TTS 突然开口」的竞态。
   Future<void> _processQueue(AnnouncementRequest req) async {
     if (_isPlaying) return;
     _isPlaying = true;
 
-    bool usedTtsFallback = false;
-
-    while (_queue.isNotEmpty) {
+    while (_queue.isNotEmpty && !_stopped) {
       final asset = _queue.removeFirst();
       final ok = await _playAudioSegment(asset);
       if (!ok) {
-        // 录音播放失败 → 整体切换到 TTS 播报完整文案
         _queue.clear();
-        await _playTts(req);
-        usedTtsFallback = true;
+        if (!_stopped) {
+          // 录音播放失败 → 整体切换到 TTS 播报完整文案
+          await _playTts(req);
+        }
         break;
       }
-    }
-
-    // 队列为空且全程用录音 → 正常结束
-    // 如果使用了 TTS 兜底，上面已经 break 了
-    if (!usedTtsFallback) {
-      // 全部用录音播放完毕
     }
 
     _isPlaying = false;
 
     // 播放期间如果有新的 play() 被跳过，补播最新的请求
-    if (_latestReq != null && _latestReq != req) {
+    if (!_stopped && _latestReq != null && _latestReq != req) {
       final pending = _latestReq!;
       _latestReq = null;
       await play(pending);
@@ -204,6 +210,7 @@ class AnnouncementPlayer {
 
   /// 停止播放
   Future<void> stop() async {
+    _stopped = true;
     _queue.clear();
     _latestReq = null;
     try { await _audioPlayer.stop(); } catch (_) {}
