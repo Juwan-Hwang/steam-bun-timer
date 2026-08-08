@@ -551,15 +551,19 @@ class AlarmReceiver : BroadcastReceiver() {
             builder.setFullScreenIntent(fullScreenPendingIntent, true)
         } else {
             // 无全屏权限 — 唤醒屏幕让用户看到高优先级通知
+            // 🔴2 修复：acquire(3000) 已设超时自动释放，不可立即 release()
+            // 立即 release 会导致屏幕瞬间熄灭，唤醒完全失效
             val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
             @Suppress("DEPRECATION")
             val wl = pm.newWakeLock(
                 PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
                 "steam_bun:alarm"
             )
-            wl.acquire(3000)
-            wl.release()
+            wl.acquire(3000) // 3 秒后自动释放，不手动 release
         }
+
+        // 🟢9: 设置 ContentIntent — 点击通知可打开 App
+        builder.setContentIntent(fullScreenPendingIntent)
 
         val notification = builder.build()
 

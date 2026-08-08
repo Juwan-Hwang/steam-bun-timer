@@ -86,6 +86,9 @@ class Batch {
   /// 焖制静默计时结束时间
   DateTime? simmeringEnd;
 
+  /// 天气获取重试时间戳 — 温度为 null 时每 60 秒重试
+  DateTime? weatherRetryAt;
+
   Batch({
     required this.id,
     required this.displayNumber,

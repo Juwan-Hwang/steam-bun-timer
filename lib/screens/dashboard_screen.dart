@@ -11,7 +11,9 @@ import '../models/recipe.dart';
 import '../services/reminder_manager.dart';
 import '../services/trigger_source.dart';
 import '../services/voice_command_service.dart';
+import '../services/finish_feedback.dart';
 import '../widgets/batch_card.dart';
+import '../widgets/completion_celebration.dart';
 import 'recipe_select_screen.dart';
 import 'settings_screen.dart';
 
@@ -85,17 +87,34 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         }
       case VoiceCommand.done:
         // 语音「好了」— 根据上下文确认
+        // 🔴1 修复：当前步骤与并行步骤互斥确认，防止同时推进
         final step = target.currentStep;
         if (step == null) return;
+
+        // 优先处理并行步骤 — 烧水完成/等待确认时「好了」=确认烧水
+        final parallel = target.parallelStep;
+        if (parallel != null &&
+            (parallel.status == StepStatus.awaitingConfirmation ||
+             parallel.status == StepStatus.done)) {
+          ref.read(activeBatchesProvider.notifier).confirmParallelStep(target.id);
+          return;
+        }
+
+        // 无并行步骤待确认 → 处理当前步骤
         if (step.status == StepStatus.evaluating) {
           ref.read(activeBatchesProvider.notifier)
               .evaluateFermentation(target.id, FermentationResult.perfect);
         } else if (step.status == StepStatus.awaitingConfirmation || step.status == StepStatus.done) {
+          // 语音完成最终工序（揭锅/出锅）同样触发通关庆祝
+          if (step.node.type == StepType.uncover || step.node.type == StepType.plateOut) {
+            FinishFeedback.celebrate();
+            CompletionCelebration.show(
+              context,
+              title: step.node.type == StepType.plateOut ? '出锅啦！' : '揭锅啦！',
+              subtitle: target.recipe.id == 'flatbread' ? '金黄酥脆 · 趁热吃' : '白白胖胖 · 热气腾腾',
+            );
+          }
           ref.read(activeBatchesProvider.notifier).confirmCurrentStep(target.id);
-        }
-        final parallel = target.parallelStep;
-        if (parallel != null && (parallel.status == StepStatus.awaitingConfirmation || parallel.status == StepStatus.done)) {
-          ref.read(activeBatchesProvider.notifier).confirmParallelStep(target.id);
         }
       case VoiceCommand.addTwoMinutes:
         ref.read(activeBatchesProvider.notifier).adjustDuration(target.id, 2);
@@ -141,7 +160,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             ),
           ),
           // 全屏提醒覆盖层 — §5.2
-          // 仅关闭提醒，不自动确认 — 用户手动点卡片按钮
+          // 点击屏幕任意位置 → 仅关闭当前提醒，后续仍会间歇提醒
+          // 点击「不再提醒」按钮 → 永久关闭该批次该动作的提醒
           if (reminder != null)
             ReminderOverlay(
               reminder: reminder,
@@ -149,6 +169,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 ref.read(activeReminderProvider.notifier).state = null;
                 ref.read(activeBatchesProvider.notifier).markReminderDismissed();
                 ReminderManager.instance.stop();
+              },
+              onDismissPermanently: () {
+                ref.read(activeBatchesProvider.notifier)
+                    .dismissReminderPermanently(reminder.batchId, reminder.actionText);
               },
             ),
         ],

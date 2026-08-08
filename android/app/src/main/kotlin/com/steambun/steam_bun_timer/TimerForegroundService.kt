@@ -126,6 +126,9 @@ class TimerForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        // 🟡4 修复：清理静态回调，防止悬空引用已销毁的 Flutter 引擎
+        // 服务销毁后 onMediaKey 仍指向旧 messenger → invokeMethod 抛异常
+        onMediaKey = null
         mediaSession?.isActive = false
         mediaSession?.release()
         mediaSession = null

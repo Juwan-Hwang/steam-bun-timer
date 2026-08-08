@@ -24,6 +24,7 @@ enum ReminderLevel {
 /// 提醒请求
 class ReminderRequest {
   final int batchNumber;
+  final String batchId;
   final String recipeName;
   final String recipeId;
   final String actionText;
@@ -31,6 +32,7 @@ class ReminderRequest {
 
   const ReminderRequest({
     required this.batchNumber,
+    required this.batchId,
     required this.recipeName,
     required this.recipeId,
     required this.actionText,
@@ -183,10 +185,16 @@ class ReminderOverlay extends StatefulWidget {
   final ReminderRequest reminder;
   final VoidCallback onConfirm;
 
+  /// 永久关闭此提醒 — 点击「不再提醒」按钮时触发
+  /// 与 onConfirm 不同：onConfirm 仅关闭当前提醒，后续仍会间歇提醒
+  /// onDismissPermanently 关闭当前提醒且今后不再提醒此事
+  final VoidCallback? onDismissPermanently;
+
   const ReminderOverlay({
     super.key,
     required this.reminder,
     required this.onConfirm,
+    this.onDismissPermanently,
   });
 
   @override
@@ -222,61 +230,88 @@ class _ReminderOverlayState extends State<ReminderOverlay>
         return Material(
           color: isRed ? const Color(0xEFEF4444) : const Color(0xE7000000),
           child: SafeArea(
-            child: InkWell(
-              onTap: widget.onConfirm,
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // 超大编号
-                    Text(
-                      '${r.batchNumber}号',
-                      style: const TextStyle(
-                        fontSize: 120,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                        letterSpacing: -4,
+            child: Column(
+              children: [
+                // 主可点击区域 — 点击任意位置仅关闭当前提醒
+                Expanded(
+                  child: InkWell(
+                    onTap: widget.onConfirm,
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // 超大编号
+                          Text(
+                            '${r.batchNumber}号',
+                            style: const TextStyle(
+                              fontSize: 120,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white,
+                              letterSpacing: -4,
+                            ),
+                          ),
+                          Text(
+                            r.recipeName,
+                            style: const TextStyle(
+                              fontSize: 40,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          Text(
+                            r.actionText,
+                            style: const TextStyle(
+                              fontSize: 56,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                              letterSpacing: 2,
+                            ),
+                          ),
+                          const SizedBox(height: 48),
+                          // 提示操作
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(9999),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
+                            ),
+                            child: const Text(
+                              '点击屏幕 / 音量键 / 蓝牙键 确认',
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: Colors.white,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    Text(
-                      r.recipeName,
-                      style: const TextStyle(
-                        fontSize: 40,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
+                  ),
+                ),
+                // 「不再提醒」按钮 — 永久关闭此事提醒
+                if (widget.onDismissPermanently != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 32),
+                    child: TextButton.icon(
+                      onPressed: widget.onDismissPermanently,
+                      icon: const Icon(Icons.notifications_off_outlined, size: 20, color: Colors.white70),
+                      label: const Text(
+                        '不再提醒',
+                        style: TextStyle(fontSize: 16, color: Colors.white70, fontWeight: FontWeight.w500),
                       ),
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      r.actionText,
-                      style: const TextStyle(
-                        fontSize: 56,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                        letterSpacing: 2,
-                      ),
-                    ),
-                    const SizedBox(height: 48),
-                    // 提示操作
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(9999),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
-                      ),
-                      child: const Text(
-                        '点击屏幕 / 音量键 / 蓝牙键 确认',
-                        style: TextStyle(
-                          fontSize: 18,
-                          color: Colors.white,
-                          fontWeight: FontWeight.w500,
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(9999),
+                          side: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
                         ),
                       ),
                     ),
-                  ],
-                ),
-              ),
+                  ),
+              ],
             ),
           ),
         );
