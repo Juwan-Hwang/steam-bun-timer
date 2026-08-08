@@ -529,6 +529,6 @@ class AlarmReceiver : BroadcastReceiver() {
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .build()
 
-        nm.notify(System.currentTimeMillis().toInt(), notification)
+        nm.notify(8888, notification)
     }
 }

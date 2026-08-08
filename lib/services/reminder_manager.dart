@@ -96,15 +96,24 @@ class ReminderManager {
 
   /// 内部停止 — 不触发 onReminderStop / setAnnouncing(false)
   /// 用于 start() 替换场景，避免回调竞态（R2 修复）
+  /// 内部停止 — 不触发 onReminderStop / setAnnouncing(false)
+  /// 用于 start() 替换场景，避免回调竞态（R2 修复）
   Future<void> _stopInternal() async {
+    // 同步立即清除 _activeReminder — isReminding 立即变 false
+    // 防止 _tick 中调用 stop() 不 await 时 _checkPendingReminders 被阻塞
+    final reminder = _activeReminder;
+    _activeReminder = null;
+
     _loopTimer?.cancel();
     _loopTimer = null;
     try { await _alarmPlayer.stop(); } catch (_) {}
     await AnnouncementPlayer.instance.stop();
-    if (_activeReminder != null) {
-      ForegroundTaskHandler.instance.cancelExactAlarm(_activeReminder!.batchNumber);
+    // I1-4: 取消两个闹钟槽位（current slot 0 + parallel slot 1）
+    if (reminder != null) {
+      final baseId = reminder.batchNumber * 10;
+      ForegroundTaskHandler.instance.cancelExactAlarm(baseId);
+      ForegroundTaskHandler.instance.cancelExactAlarm(baseId + 1);
     }
-    _activeReminder = null;
   }
 
   /// 停止所有提醒

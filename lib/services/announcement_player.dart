@@ -116,6 +116,10 @@ class AnnouncementPlayer {
   /// 防止「播放中 play()」使旧 _processQueue 代际失效导致 _isPlaying 永久卡死（R1 修复）
   int _generation = 0;
 
+  /// TTS 兜底文案 — 录音中缺动作段时，录音播完后 TTS 此文案（I1-2 修复）
+  /// null 表示不需要 TTS 补充
+  String? _ttsFallbackText;
+
   /// 播放一条完整的播报
   ///
   /// 如果当前正在播放，只记录 _latestReq 不入队——
@@ -136,13 +140,9 @@ class AnnouncementPlayer {
     if (v != null) segments.add(v.audioAsset);
     if (a != null) segments.add(a.audioAsset);
 
-    // I3: 如果动作段无录音但有文案，不能静默丢弃 —
-    // 编号/品种段播放成功后 TTS 兜底不会触发，动作文案永远不被播报。
-    // 直接整体走 TTS，确保完整文案被播报。
-    if (a == null && req.actionText.isNotEmpty) {
-      await _playTts(req);
-      return;
-    }
+    // I1-2: 如果动作段无录音但有文案，先播编号/品种录音，再 TTS 补动作段
+    // 不整体降级到 TTS — 录音优先，TTS 仅补缺失段
+    _ttsFallbackText = (a == null && req.actionText.isNotEmpty) ? req.actionText : null;
 
     for (final s in segments) {
       _queue.add(s);
@@ -175,6 +175,14 @@ class AnnouncementPlayer {
     // 代际不匹配 → 新 play() 已递增代际并启动新队列，新队列 owns _isPlaying
     // 旧队列直接退出，不复位 _isPlaying 防止覆盖新队列状态（N4 修复）
     if (_generation != myGen) return;
+
+    // I1-1: 录音全部播完后，如果有 TTS 兜底文案，在此播放
+    // 此时 _isPlaying 仍为 true，防止 8 秒定时器并发再起 TTS
+    if (!_stopped && _ttsFallbackText != null) {
+      final text = _ttsFallbackText!;
+      _ttsFallbackText = null;
+      await _playTtsText(text);
+    }
 
     _isPlaying = false;
 
@@ -231,8 +239,13 @@ class AnnouncementPlayer {
     }
   }
 
-  /// TTS 降级播报
+  /// TTS 降级播报 — 完整文案
   Future<void> _playTts(AnnouncementRequest req) async {
+    await _playTtsText(req.speechText);
+  }
+
+  /// TTS 播报指定文案 — I1-2: 录音缺动作段时仅 TTS 动作文案
+  Future<void> _playTtsText(String text) async {
     if (!_ttsReady) {
       try {
         await _tts.setLanguage('zh-CN');
@@ -246,7 +259,7 @@ class AnnouncementPlayer {
       }
     }
     try {
-      await _tts.speak(req.speechText);
+      await _tts.speak(text);
     } catch (_) {}
   }
 
@@ -255,6 +268,7 @@ class AnnouncementPlayer {
     _stopped = true;
     _queue.clear();
     _latestReq = null;
+    _ttsFallbackText = null;
     try { await _audioPlayer.stop(); } catch (_) {}
     try { await _tts.stop(); } catch (_) {}
     _isPlaying = false;

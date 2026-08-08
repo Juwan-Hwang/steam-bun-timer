@@ -201,7 +201,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         final sinceReminder = DateTime.now().difference(step.reminderSentAt!).inMinutes;
         if (sinceReminder >= 5) {
           // P2: 自动推进前先停止当前循环提醒
-          // 否则 isReminding 永久卡 true，_checkPendingReminders 对所有批次失效
+          // stop() 内部异步执行，但 _activeReminder=null 是同步的，
+          // isReminding 立即变 false，_checkPendingReminders 不会被阻塞
           ReminderManager.instance.stop();
           ref.read(activeReminderProvider.notifier).state = null;
 
@@ -284,9 +285,36 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
           parallel.status = StepStatus.done;
           parallel.reminderSentAt = DateTime.now();
           // 烧水完成 → 提醒上锅
-          _triggerReminder(batch, '该上锅了');
+          _triggerReminder(batch, '该上锅了', parallel: true);
           changed = true;
         }
+      }
+
+      // 8. I1-3: 为 running 步骤刷新 plannedEnd 闹钟
+      // 每秒检查并注册/更新，确保进程被杀后闹钟仍能到点触发
+      // AlarmManager.setExact 是幂等的（FLAG_UPDATE_CURRENT），重复注册无副作用
+      if (step.status == StepStatus.running &&
+          step.plannedEnd != null &&
+          step.plannedEnd!.isAfter(DateTime.now())) {
+        ForegroundTaskHandler.instance.scheduleExactAlarm(
+          id: batch.displayNumber * 10, // I1-4: 当前步骤 slot 0
+          triggerAt: step.plannedEnd!,
+          title: '${batch.displayNumber}号 ${batch.recipe.name}',
+          body: _actionTextForStep(step),
+        );
+      }
+      // 同上：并行 running 步骤也注册闹钟
+      final pStep = batch.parallelStep;
+      if (pStep != null &&
+          pStep.status == StepStatus.running &&
+          pStep.plannedEnd != null &&
+          pStep.plannedEnd!.isAfter(DateTime.now())) {
+        ForegroundTaskHandler.instance.scheduleExactAlarm(
+          id: batch.displayNumber * 10 + 1, // I1-4: 并行步骤 slot 1
+          triggerAt: pStep.plannedEnd!,
+          title: '${batch.displayNumber}号 ${batch.recipe.name}',
+          body: '该上锅了',
+        );
       }
 
       // 7. 更新前台服务通知
@@ -667,14 +695,14 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     batch.parallelStep = boilingStep;
 
     // 播报「该烧水了」
-    _triggerReminder(batch, '该烧水了');
+    _triggerReminder(batch, '该烧水了', parallel: true);
   }
 
   /// 触发提醒 — §5.2
   ///
   /// 注意：此方法不设置 reminderSentAt——由调用方在正确的 step 上设置，
   /// 避免并行烧水提醒污染发酵步骤的 reminderSentAt（I6 修复）。
-  void _triggerReminder(Batch batch, String actionText) {
+  void _triggerReminder(Batch batch, String actionText, {bool parallel = false}) {
     final req = ReminderRequest(
       batchNumber: batch.displayNumber,
       recipeName: batch.recipe.name,
@@ -685,9 +713,10 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     ref.read(activeReminderProvider.notifier).state = req;
     ReminderManager.instance.start(req);
 
-    // 设置精确闹钟兜底
+    // 设置精确闹钟兜底 — I1-4: 复合 ID 避免覆盖 plannedEnd 闹钟
+    final alarmId = batch.displayNumber * 10 + (parallel ? 1 : 0);
     ForegroundTaskHandler.instance.scheduleExactAlarm(
-      id: batch.displayNumber,
+      id: alarmId,
       triggerAt: DateTime.now().add(const Duration(seconds: 5)),
       title: '${batch.displayNumber}号 ${batch.recipe.name}',
       body: actionText,
@@ -929,38 +958,43 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('has_active', true);
 
-      // P1 + I1 + N2: 重新注册精确闹钟 — Android 重启后 AlarmManager 全部清空
-      // 覆盖所有需要到点提醒的场景：
-      //   running → 按 plannedEnd 时间注册（最常见场景）
-      //   evaluating/done/awaitingConfirmation → 立即 5 秒兜底
-      //   parallelStep done/awaitingConfirmation → 立即 5 秒兜底
+      // P1 + I1-3 + I1-4 + N2: 重新注册精确闹钟 — Android 重启后 AlarmManager 全部清空
+      // 复合 ID: slot 0 = current step, slot 1 = parallel step — 两者独立注册不互斥
       for (final batch in state) {
         if (batch.status != BatchStatus.active) continue;
 
-        // 检查并行步骤
+        // 检查并行步骤 — slot 1（不 continue，与当前步骤独立）
         final parallel = batch.parallelStep;
         if (parallel != null && parallel.reminderSentAt != null &&
             (parallel.status == StepStatus.done ||
              parallel.status == StepStatus.awaitingConfirmation)) {
           ForegroundTaskHandler.instance.scheduleExactAlarm(
-            id: batch.displayNumber,
+            id: batch.displayNumber * 10 + 1,
             triggerAt: DateTime.now().add(const Duration(seconds: 5)),
             title: '${batch.displayNumber}号 ${batch.recipe.name}',
             body: parallel.status == StepStatus.done ? '该上锅了' : '该烧水了',
           );
-          continue; // 并行步骤优先，跳过当前步骤
+        } else if (parallel != null &&
+            parallel.status == StepStatus.running &&
+            parallel.plannedEnd != null &&
+            parallel.plannedEnd!.isAfter(DateTime.now())) {
+          ForegroundTaskHandler.instance.scheduleExactAlarm(
+            id: batch.displayNumber * 10 + 1,
+            triggerAt: parallel.plannedEnd!,
+            title: '${batch.displayNumber}号 ${batch.recipe.name}',
+            body: '该上锅了',
+          );
         }
 
-        // 检查当前步骤
+        // 检查当前步骤 — slot 0
         final step = batch.currentStep;
         if (step == null) continue;
 
         if (step.status == StepStatus.running &&
             step.plannedEnd != null &&
             step.plannedEnd!.isAfter(DateTime.now())) {
-          // P1: running 步骤按 plannedEnd 注册闹钟
           ForegroundTaskHandler.instance.scheduleExactAlarm(
-            id: batch.displayNumber,
+            id: batch.displayNumber * 10,
             triggerAt: step.plannedEnd!,
             title: '${batch.displayNumber}号 ${batch.recipe.name}',
             body: _actionTextForStep(step),
@@ -969,12 +1003,21 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
             (step.status == StepStatus.evaluating ||
              step.status == StepStatus.done ||
              step.status == StepStatus.awaitingConfirmation)) {
-          // 已在待确认状态 → 5 秒兜底
           ForegroundTaskHandler.instance.scheduleExactAlarm(
-            id: batch.displayNumber,
+            id: batch.displayNumber * 10,
             triggerAt: DateTime.now().add(const Duration(seconds: 5)),
             title: '${batch.displayNumber}号 ${batch.recipe.name}',
             body: _actionTextForStep(step),
+          );
+        } else if (step.status == StepStatus.simmering &&
+            batch.simmeringEnd != null &&
+            batch.simmeringEnd!.isAfter(DateTime.now())) {
+          // 轻微: simmering 步骤按 simmeringEnd 注册闹钟
+          ForegroundTaskHandler.instance.scheduleExactAlarm(
+            id: batch.displayNumber * 10,
+            triggerAt: batch.simmeringEnd!,
+            title: '${batch.displayNumber}号 ${batch.recipe.name}',
+            body: '可以揭锅了',
           );
         }
       }
