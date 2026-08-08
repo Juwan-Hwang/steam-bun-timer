@@ -165,6 +165,9 @@ class AnnouncementPlayer {
       if (_generation != myGen) break; // 新 play() 或 stop() 已接管
       if (!ok) {
         _queue.clear();
+        // 清空 _ttsFallbackText — _playTts(req) 已播放完整文案（含动作段），
+        // 若不清空，循环后会再补播一次动作段导致重复
+        _ttsFallbackText = null;
         if (!_stopped && _generation == myGen) {
           await _playTts(req);
         }

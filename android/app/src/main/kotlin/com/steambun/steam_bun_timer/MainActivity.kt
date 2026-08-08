@@ -494,6 +494,8 @@ class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val title = intent.getStringExtra("title") ?: "蒸馒头计时器"
         val body = intent.getStringExtra("body") ?: ""
+        // 读取复合 ID (batchNumber*10+slot) 作为通知 ID，确保多锅并行时各槽位独立展示
+        val notifId = intent.getIntExtra("id", 8888)
 
         // 发送高优先级通知
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -529,6 +531,6 @@ class AlarmReceiver : BroadcastReceiver() {
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .build()
 
-        nm.notify(8888, notification)
+        nm.notify(notifId, notification)
     }
 }
