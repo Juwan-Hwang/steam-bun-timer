@@ -86,12 +86,12 @@ class TimerForegroundService : Service() {
                 .build()
             mediaSession?.setPlaybackState(state)
             mediaSession?.setCallback(object : MediaSession.Callback() {
-                override fun onMediaButtonEvent(mediaButtonIntent: Intent?): Boolean {
+                override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
                     val keyEvent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        mediaButtonIntent?.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+                        mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
                     } else {
                         @Suppress("DEPRECATION")
-                        mediaButtonIntent?.getParcelableExtra(Intent.EXTRA_KEY_EVENT) as? KeyEvent
+                        mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT) as? KeyEvent
                     }
                     if (keyEvent != null && keyEvent.action == KeyEvent.ACTION_DOWN) {
                         onMediaKey?.invoke(keyEvent.keyCode)
