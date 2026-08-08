@@ -174,7 +174,8 @@ class _BatchCardState extends State<BatchCard>
             children: [
               Text(b.recipe.name, style: TextStyle(fontSize: ZephyrFontSize.lg, fontWeight: FontWeight.w600, color: z.textPrimary)),
               if (s != null)
-                Text(s.node.label, style: TextStyle(fontSize: ZephyrFontSize.xs, fontWeight: FontWeight.w500, color: z.textSecondary)),
+                // 状态标签字号放大 — 方便看到当前状态
+                Text(s.node.label, style: TextStyle(fontSize: ZephyrFontSize.sm, fontWeight: FontWeight.w600, color: z.textSecondary)),
             ],
           ),
         ),
@@ -360,6 +361,8 @@ class _BatchCardState extends State<BatchCard>
   }
 
   Widget _awaiting(ZephyrSemantic z, Color accent, StepRuntime s) {
+    // 用户友好文案 — 不显示内部设计规格 uiState
+    final friendlyText = _awaitingText(s);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(ZephyrSpacing.s4),
@@ -373,13 +376,31 @@ class _BatchCardState extends State<BatchCard>
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              s.node.uiState,
-              style: TextStyle(fontSize: ZephyrFontSize.base, fontWeight: FontWeight.w600, color: accent),
+              friendlyText,
+              style: TextStyle(fontSize: ZephyrFontSize.lg, fontWeight: FontWeight.w600, color: accent),
             ),
           ),
         ],
       ),
     );
+  }
+
+  /// awaitingConfirmation 状态的用户友好文案
+  String _awaitingText(StepRuntime s) {
+    switch (s.node.type) {
+      case StepType.boiling:
+        return '等待开始烧水';
+      case StepType.steaming:
+        return '等待上锅蒸制';
+      case StepType.uncover:
+        return '可以揭锅了';
+      case StepType.flipping:
+        return '等待翻面';
+      case StepType.plateOut:
+        return '等待出锅';
+      default:
+        return '等待确认';
+    }
   }
 
   /// 评价三选一 — §4.3
@@ -465,7 +486,7 @@ class _BatchCardState extends State<BatchCard>
       children: [
         Icon(Icons.soup_kitchen, size: 32, color: z.textTertiary),
         const SizedBox(width: 8),
-        Text('焖制中…', style: TextStyle(fontSize: ZephyrFontSize.xl, fontWeight: FontWeight.w300, color: z.textTertiary)),
+        Text('焖制中…', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w300, color: z.textTertiary)),
       ],
     );
   }
@@ -623,7 +644,7 @@ class _BatchCardState extends State<BatchCard>
         backgroundColor: z.bgElevated,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ZephyrRadius.overlay)),
         title: Text('取消这一锅？', style: TextStyle(color: z.textPrimary, fontWeight: FontWeight.w600)),
-        content: Text('此批次将标记为「未完成」，不参与数据分析。', style: TextStyle(color: z.textSecondary, fontSize: 14)),
+        content: Text('此批次将标记为「未完成」。', style: TextStyle(color: z.textSecondary, fontSize: 14)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('不了')),
           TextButton(
@@ -657,38 +678,73 @@ class _BatchCardState extends State<BatchCard>
     );
   }
 
-  // ── 位置标签选择 ──
+  // ── 位置标签 — 用户自定义输入 ──
   void _showPositionPicker(ZephyrSemantic z) {
-    final labels = ['左盆', '右盆', '灶台边', '案板边'];
+    final controller = TextEditingController(text: widget.batch.positionLabel ?? '');
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: z.bgElevated,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(ZephyrRadius.overlay))),
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(ZephyrSpacing.s5),
-              child: Text('选择位置标签', style: TextStyle(fontSize: ZephyrFontSize.lg, fontWeight: FontWeight.w600, color: z.textPrimary)),
-            ),
-            for (final label in labels)
-              ListTile(
-                title: Text(label, style: TextStyle(color: z.textPrimary)),
-                onTap: () {
-                  widget.onSetPositionLabel?.call(label);
-                  Navigator.pop(ctx);
-                },
+        child: Padding(
+          padding: EdgeInsets.only(
+            left: ZephyrSpacing.s5, right: ZephyrSpacing.s5, top: ZephyrSpacing.s5,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + ZephyrSpacing.s5,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('位置标签', style: TextStyle(fontSize: ZephyrFontSize.lg, fontWeight: FontWeight.w600, color: z.textPrimary)),
+              const SizedBox(height: 4),
+              Text('自定义输入，如「左盆」「灶台」等', style: TextStyle(fontSize: ZephyrFontSize.xs, color: z.textTertiary)),
+              const SizedBox(height: ZephyrSpacing.s3),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: '输入位置标签…',
+                  hintStyle: TextStyle(color: z.textTertiary, fontSize: 14),
+                  filled: true,
+                  fillColor: z.bgMuted,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(ZephyrRadius.md),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                style: TextStyle(color: z.textPrimary, fontSize: 16),
               ),
-            ListTile(
-              title: Text('清除标签', style: TextStyle(color: z.danger)),
-              onTap: () {
-                widget.onSetPositionLabel?.call('');
-                Navigator.pop(ctx);
-              },
-            ),
-            const SizedBox(height: ZephyrSpacing.s3),
-          ],
+              const SizedBox(height: ZephyrSpacing.s3),
+              Row(
+                children: [
+                  if (widget.batch.positionLabel != null)
+                    TextButton(
+                      onPressed: () {
+                        widget.onSetPositionLabel?.call('');
+                        Navigator.pop(ctx);
+                      },
+                      child: Text('清除', style: TextStyle(color: z.danger)),
+                    ),
+                  const Spacer(),
+                  ElevatedButton(
+                    onPressed: () {
+                      final text = controller.text.trim();
+                      if (text.isNotEmpty) {
+                        widget.onSetPositionLabel?.call(text);
+                      }
+                      Navigator.pop(ctx);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: z.accentPrimary,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('确定'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -144,6 +144,9 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   final Ref ref;
   Timer? _checkTimer;
 
+  /// 提醒关闭冷却时间 — 关闭后 30 秒内不重新触发，防止多锅提醒反复出现
+  DateTime? _reminderDismissedAt;
+
   ActiveBatchesNotifier(this.ref) : super([]) {
     // 每秒检查所有批次状态
     _checkTimer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
@@ -157,6 +160,11 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     _checkTimer?.cancel();
     ReminderManager.instance.onReminderStop = null;
     super.dispose();
+  }
+
+  /// 设置提醒关闭冷却 — UI 层关闭提醒后调用，30 秒内不重新触发
+  void markReminderDismissed() {
+    _reminderDismissedAt = DateTime.now();
   }
 
   /// 每秒 tick — 检查超时/并行触发/焖制计时/低置信度
@@ -209,7 +217,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
           step.lowConfidence = true;
           batch.fermentationResult = FermentationResult.perfect;
           // 自动转入下阶段（§6 超过 5 min 未确认打低置信度，自动转入下阶段）
-          _evaluateFermentationInternal(batch, FermentationResult.perfect);
+          // 🔴1: autoAdvance=true → _advanceToNext 跳过 done 烧水时清理 parallelStep 并触发「该上锅了」
+          _evaluateFermentationInternal(batch, FermentationResult.perfect, autoAdvance: true);
           changed = true;
         } else if (sinceReminder >= 2) {
           // 2 分钟后每 30 秒间歇提醒
@@ -267,10 +276,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         if (remain != null && remain <= 0) {
           step.status = StepStatus.done;
           step.reminderSentAt = DateTime.now();
-          final nextIdx = batch.currentStepIndex + 1;
-          if (nextIdx < batch.steps.length) {
-            _triggerReminder(batch, batch.steps[nextIdx].node.announcementAction ?? '');
-          }
+          // 用当前步骤的 announcementAction，不是下一步的
+          _triggerReminder(batch, step.node.announcementAction ?? _actionTextForStep(step));
           changed = true;
         }
       }
@@ -388,6 +395,15 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         _evaluateFermentationInternal(batch, FermentationResult.perfect);
       } else if (current?.status == StepStatus.done) {
         _advanceToNext(batch, idx);
+      } else if (current?.status == StepStatus.awaitingConfirmation) {
+        // 🔴1: 蒸制已进入 awaitingConfirmation（autoAdvance 跳过烧水后）
+        // 用户确认「该上锅了」→ 开始蒸制倒计时
+        current!.actualStart = DateTime.now();
+        current.plannedStart = DateTime.now();
+        current.plannedEnd = DateTime.now().add(
+          Duration(minutes: current.node.defaultDurationMinutes ?? 15),
+        );
+        current.status = StepStatus.running;
       }
     }
 
@@ -467,7 +483,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     _persistBatch(batch);
   }
 
-  void _evaluateFermentationInternal(Batch batch, FermentationResult result) {
+  void _evaluateFermentationInternal(Batch batch, FermentationResult result, {bool autoAdvance = false}) {
     final fStep = batch.fermentationStep!;
     fStep.actualConfirm = DateTime.now();
     fStep.status = StepStatus.done;
@@ -477,7 +493,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     // 如果烧水未并行（饼子无发酵），直接进入下一步
     final idx = state.indexWhere((b) => b.id == batch.id);
     if (idx >= 0) {
-      _advanceToNext(batch, idx);
+      _advanceToNext(batch, idx, autoAdvance: autoAdvance);
     }
   }
 
@@ -558,6 +574,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     // 入库标记为未完成
     _saveBatchRecord(batch);
 
+    // 🟢: 取消该批次的所有精确闹钟
+    _cancelBatchAlarms(batch.displayNumber);
     ref.read(numberPoolProvider).release(batch.displayNumber);
     ActiveBatchStorage.instance.removeBatch(batchId);
     state = List.from(state)..removeAt(idx);
@@ -574,6 +592,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     ReminderManager.instance.stop();
     ref.read(activeReminderProvider.notifier).state = null;
 
+    // 🟢: 取消该批次的所有精确闹钟
+    _cancelBatchAlarms(batch.displayNumber);
     ref.read(numberPoolProvider).release(batch.displayNumber);
     ActiveBatchStorage.instance.removeBatch(batchId);
     state = List.from(state)..removeAt(idx);
@@ -594,6 +614,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     oldBatch.status = BatchStatus.completed;
     oldBatch.completedAt = DateTime.now();
     _saveBatchRecord(oldBatch);
+    // 🟢: 取消旧批次的所有精确闹钟
+    _cancelBatchAlarms(oldBatch.displayNumber);
     ref.read(numberPoolProvider).release(oldBatch.displayNumber);
     ActiveBatchStorage.instance.removeBatch(batchId);
 
@@ -622,14 +644,25 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
 
   // ── 内部方法 ──
 
-  void _advanceToNext(Batch batch, int idx) {
+  /// 🟢: 取消批次的所有精确闹钟（slot 0 + slot 1），防止幻影通知
+  void _cancelBatchAlarms(int displayNumber) {
+    ForegroundTaskHandler.instance.cancelExactAlarm(displayNumber * 10);
+    ForegroundTaskHandler.instance.cancelExactAlarm(displayNumber * 10 + 1);
+  }
+
+  void _advanceToNext(Batch batch, int idx, {bool autoAdvance = false}) {
     if (batch.currentStepIndex < batch.steps.length - 1) {
       batch.currentStepIndex++;
       final next = batch.currentStep!;
 
       // P0-2: 如果该步骤已通过并行完成（status == done），直接跳过
       if (next.status == StepStatus.done) {
-        _advanceToNext(batch, idx);
+        // 🔴1: 清理悬垂的 parallelStep — 跳过 done 并行步骤时必须清理，
+        // 否则 _checkPendingReminders 误触发「该上锅了」且 confirmParallelStep 不匹配
+        if (batch.parallelStep == next) {
+          batch.parallelStep = null;
+        }
+        _advanceToNext(batch, idx, autoAdvance: autoAdvance);
         return;
       }
 
@@ -648,6 +681,12 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
           // 蒸制 — 等待用户确认「已开始蒸」后才开始倒计时
           next.status = StepStatus.awaitingConfirmation;
           next.actualStart = DateTime.now();
+          // 🔴1: 自动推进场景（低置信度 5 min 超时）下，烧水已完成但用户未确认「该上锅了」
+          // parallelStep 已在上文清理，需设置 reminderSentAt 并触发提醒，否则进入静默等待
+          if (autoAdvance) {
+            next.reminderSentAt = DateTime.now();
+            _triggerReminder(batch, '该上锅了');
+          }
         case StepType.simmering:
           // 焖制 — 进入静默计时，5 分钟后轻提示
           // 「该关火了」已在蒸制倒计时结束时触发，此处不重复
@@ -675,6 +714,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       batch.status = BatchStatus.completed;
       batch.completedAt = DateTime.now();
       _saveBatchRecord(batch);
+      // 🟢: 取消该批次的所有精确闹钟，防止幻影通知
+      _cancelBatchAlarms(batch.displayNumber);
       // 回收编号 — 完成后立即释放，允许开新锅
       ref.read(numberPoolProvider).release(batch.displayNumber);
       // 清理持久化 — 防止崩溃恢复后残留已完成批次
@@ -770,6 +811,12 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   void _checkPendingReminders() {
     if (state.isEmpty) return;
     if (ReminderManager.instance.isReminding) return;
+    // 冷却期 — 关闭提醒后 30 秒内不重新触发，让用户有时间手动点按钮
+    if (_reminderDismissedAt != null) {
+      final elapsed = DateTime.now().difference(_reminderDismissedAt!).inSeconds;
+      if (elapsed < 30) return;
+      _reminderDismissedAt = null;
+    }
 
     // 扫描所有批次，找到第一个有待提醒步骤的
     for (final batch in state) {
@@ -781,7 +828,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
           parallel.reminderSentAt != null &&
           (parallel.status == StepStatus.done ||
            parallel.status == StepStatus.awaitingConfirmation)) {
-        _triggerReminder(batch, parallel.status == StepStatus.done ? '该上锅了' : '该烧水了');
+        // 🟢: 传 parallel:true 使用 slot 1 闹钟 ID
+        _triggerReminder(batch, parallel.status == StepStatus.done ? '该上锅了' : '该烧水了', parallel: true);
         return;
       }
 
@@ -789,7 +837,13 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       final step = batch.currentStep;
       if (step == null || step.reminderSentAt == null) continue;
       if (step.status == StepStatus.evaluating) {
-        _triggerIntermittentReminder(batch, '发酵好了');
+        // 🟡4: 发酵评价使用 action 级别（全屏红色 overlay），不用 intermittent 降级
+        _triggerReminder(batch, '发酵好了');
+        return;
+      }
+      if (step.status == StepStatus.awaitingConfirmation) {
+        // 🔴1: 蒸制 awaitingConfirmation 恢复提醒（autoAdvance 场景）
+        _triggerReminder(batch, step.node.announcementAction ?? _actionTextForStep(step));
         return;
       }
       if (step.status == StepStatus.done) {
@@ -820,22 +874,25 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       case StepType.flipping:
         return '该翻面了'; // 无录音，TTS 兜底
       case StepType.plateOut:
-        return '该出锅了'; // 无录音，TTS 兜底
+        return '可以出锅了'; // 匹配录音 action_plate_out.wav
     }
   }
 
-  /// 更新前台服务通知
+  /// 更新前台服务通知 — 按分钟节流，避免每秒刷新导致闪烁
+  String? _lastNotifContent;
   void _updateForegroundNotification(Batch batch) {
     final step = batch.currentStep;
     if (step == null) return;
     final r = step.remainingSeconds;
+    // 只显示分钟级，不显示秒 — 减少刷新频率
     final timeStr = r != null
-        ? '${(r ~/ 60).toString().padLeft(2, '0')}:${(r % 60).toString().padLeft(2, '0')}'
+        ? '${(r ~/ 60).toString().padLeft(2, '0')}分钟'
         : step.node.label;
-
-    ForegroundTaskHandler.instance.updateNotification(
-      content: '${batch.displayNumber}号 ${batch.recipe.name} ${step.node.label} $timeStr',
-    );
+    final content = '${batch.displayNumber}号 ${batch.recipe.name} ${step.node.label} $timeStr';
+    // 内容未变则跳过 — 避免通知闪烁
+    if (_lastNotifContent == content) return;
+    _lastNotifContent = content;
+    ForegroundTaskHandler.instance.updateNotification(content: content);
   }
 
   /// 异步获取天气 — §4.5
@@ -849,6 +906,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       state[idx].temperature = data.temperature;
       state[idx].humidity = data.humidity;
       state = List.of(state);
+      // 🟡6: 持久化温度/湿度，重启后不丢失（连带习惯学习依赖温度）
+      await _persistBatch(state[idx]);
     } catch (_) {
       // 宁缺数据，不丢数据 — 温度保持 null
     }
@@ -944,9 +1003,18 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         pool.acquireSpecific(batch.displayNumber);
       } else {
         // 编号不可用时重新分配
-        batch.displayNumber = pool.acquire() ?? 0;
+        final newNumber = pool.acquire();
+        if (newNumber == null) {
+          // 🟢: 编号池已满 — 无法恢复此批次，标记为已取消避免 0 号闹钟 ID 冲突
+          batch.status = BatchStatus.cancelled;
+          await ActiveBatchStorage.instance.removeBatch(batch.id);
+          continue;
+        }
+        batch.displayNumber = newNumber;
       }
     }
+    // 过滤掉无法恢复的已取消批次
+    batches.removeWhere((b) => b.status == BatchStatus.cancelled);
 
     state = batches;
 

@@ -46,72 +46,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     VoiceCommandService.instance.initialize();
   }
 
-  /// 触发源回调 — 确认当前最紧急的批次
+  /// 触发源回调 — 仅关闭提醒，不自动确认下一步
   ///
-  /// P0-1: 发酵评价状态下，音量键 = 默认「正好」而非跳过评价
-  /// P0-3: 并行期间根据提醒文案确认正确目标（发酵 vs 并行烧水）
+  /// 用户反馈：提醒关闭后应先回到看板，让用户手动点按钮确认
+  /// 多锅场景下自动确认会导致关不掉提醒、反复出现
   void _handleTrigger() {
-    // 始终先清除全屏提醒覆盖层
+    // 清除全屏提醒覆盖层
     ref.read(activeReminderProvider.notifier).state = null;
-
-    final batches = ref.read(activeBatchesProvider);
-    if (batches.isEmpty) {
-      ReminderManager.instance.stop();
-      return;
-    }
-
-    final sorted = _sortByUrgency(batches);
-    final mostUrgent = sorted.first;
-
-    // 捕获当前活跃提醒的文案（stop 后会清空）
-    final activeReminder = ReminderManager.instance.activeReminder;
-    final actionText = activeReminder?.actionText;
-
-    if (ReminderManager.instance.isReminding) {
-      ReminderManager.instance.stop().then((_) {
-        _confirmBasedOnContext(mostUrgent, actionText);
-      });
-      return;
-    }
-
-    // 没有活跃提醒时，确认当前工序
-    _confirmBasedOnContext(mostUrgent, null);
-  }
-
-  /// 根据上下文确认正确的工序
-  void _confirmBasedOnContext(Batch batch, String? reminderAction) {
-    final step = batch.currentStep;
-    if (step == null) return;
-
-    // P0-1: 发酵评价状态 → 音量键默认「正好」
-    if (step.status == StepStatus.evaluating) {
-      ref.read(activeBatchesProvider.notifier)
-          .evaluateFermentation(batch.id, FermentationResult.perfect);
-      return;
-    }
-
-    // P0-3: 并行步骤确认 — 用步骤状态机判断，不依赖文案匹配
-    final parallel = batch.parallelStep;
-    if (parallel != null) {
-      // 并行烧水 awaitingConfirmation → 确认「该烧水了」
-      if (parallel.status == StepStatus.awaitingConfirmation) {
-        ref.read(activeBatchesProvider.notifier)
-            .confirmParallelStep(batch.id);
-        return;
-      }
-      // 并行烧水 done → 确认「该上锅了」
-      if (parallel.status == StepStatus.done) {
-        ref.read(activeBatchesProvider.notifier)
-            .confirmParallelStep(batch.id);
-        return;
-      }
-    }
-
-    // 默认：确认当前工序（仅在需要用户操作时响应）
-    if (step.status == StepStatus.awaitingConfirmation ||
-        step.status == StepStatus.done) {
-      ref.read(activeBatchesProvider.notifier).confirmCurrentStep(batch.id);
-    }
+    // 标记冷却 — 30 秒内不重新触发提醒
+    ref.read(activeBatchesProvider.notifier).markReminderDismissed();
+    // 仅停止提醒（声音/振动/闹钟），不自动确认任何步骤
+    ReminderManager.instance.stop();
   }
 
   /// 语音指令处理 — V2
@@ -139,8 +84,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           ref.read(activeBatchesProvider.notifier).confirmCurrentStep(target.id);
         }
       case VoiceCommand.done:
-        // 复用上下文确认逻辑 — 评价状态默认「正好」
-        _confirmBasedOnContext(target, null);
+        // 语音「好了」— 根据上下文确认
+        final step = target.currentStep;
+        if (step == null) return;
+        if (step.status == StepStatus.evaluating) {
+          ref.read(activeBatchesProvider.notifier)
+              .evaluateFermentation(target.id, FermentationResult.perfect);
+        } else if (step.status == StepStatus.awaitingConfirmation || step.status == StepStatus.done) {
+          ref.read(activeBatchesProvider.notifier).confirmCurrentStep(target.id);
+        }
+        final parallel = target.parallelStep;
+        if (parallel != null && (parallel.status == StepStatus.awaitingConfirmation || parallel.status == StepStatus.done)) {
+          ref.read(activeBatchesProvider.notifier).confirmParallelStep(target.id);
+        }
       case VoiceCommand.addTwoMinutes:
         ref.read(activeBatchesProvider.notifier).adjustDuration(target.id, 2);
     }
@@ -185,12 +141,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             ),
           ),
           // 全屏提醒覆盖层 — §5.2
+          // 仅关闭提醒，不自动确认 — 用户手动点卡片按钮
           if (reminder != null)
             ReminderOverlay(
               reminder: reminder,
               onConfirm: () {
                 ref.read(activeReminderProvider.notifier).state = null;
-                _handleTrigger();
+                ref.read(activeBatchesProvider.notifier).markReminderDismissed();
+                ReminderManager.instance.stop();
               },
             ),
         ],
@@ -297,6 +255,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     switch (s.status) {
       case StepStatus.awaitingConfirmation:
       case StepStatus.evaluating:
+      case StepStatus.done:
+        // done 也需要用户确认推进， urgency 应与 awaitingConfirmation 同级
         return 100;
       case StepStatus.running:
         final r = s.remainingSeconds;

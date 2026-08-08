@@ -55,6 +55,11 @@ class MainActivity : FlutterActivity() {
 
         // ── 前台服务 + 音量键 MethodChannel ──
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_FOREGROUND)
+        // 🔴2: 注册 MediaSession 按键回调 — 前台服务 MediaSession 收到后台媒体按键时转发给 Flutter
+        TimerForegroundService.onMediaKey = { keyCode ->
+            methodChannel?.invokeMethod("onKeyEvent", keyCode)
+        }
+
         methodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "startForeground" -> {
@@ -164,8 +169,12 @@ class MainActivity : FlutterActivity() {
             KeyEvent.KEYCODE_CALL,            // 5  — 部分蓝牙设备
             KeyEvent.KEYCODE_DPAD_CENTER,     // 23 — 部分蓝牙遥控/车载设备
             KeyEvent.KEYCODE_CAMERA -> {      // 27 — 蓝牙相机快门
-                methodChannel?.invokeMethod("onKeyEvent", keyCode)
-                return true
+                // 🟢: 仅在有活跃批次时拦截，空闲时不吞线控/接听/快门系统行为
+                if (interceptVolumeKeys) {
+                    methodChannel?.invokeMethod("onKeyEvent", keyCode)
+                    return true
+                }
+                return super.onKeyDown(keyCode, event)
             }
         }
         return super.onKeyDown(keyCode, event)
@@ -183,7 +192,8 @@ class MainActivity : FlutterActivity() {
             KeyEvent.KEYCODE_CALL,
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_CAMERA -> {
-                return true
+                if (interceptVolumeKeys) return true
+                return super.onKeyUp(keyCode, event)
             }
         }
         return super.onKeyUp(keyCode, event)
@@ -290,16 +300,15 @@ class MainActivity : FlutterActivity() {
             result.success(true)
             return
         }
-        // 通过 Activity Result API 请求
-        // FlutterActivity 已处理权限请求回调
+        // 🟡5: 不再无条件返回 true — 跳转设置页后用户可能未授权
+        // Flutter 侧已改用 permission_handler 正确请求运行时权限
+        // 此方法保留作为 fallback：永久拒绝时跳转设置页
         try {
             val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
             intent.putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
             startActivity(intent)
-            result.success(true)
-        } catch (_: Exception) {
-            result.success(false)
-        }
+        } catch (_: Exception) {}
+        result.success(false)
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -512,6 +521,14 @@ class AlarmReceiver : BroadcastReceiver() {
             nm.createNotificationChannel(channel)
         }
 
+        // 🟡7: Android 14+ USE_FULL_SCREEN_INTENT 是受限权限
+        // 计时类应用默认授予，但需检查 — 无权限时唤醒屏幕 + 高优先级通知降级
+        val canFullScreen = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            nm.canUseFullScreenIntent()
+        } else {
+            true
+        }
+
         // I2: Android 10+ 限制后台 startActivity — 用 fullScreenIntent 替代
         // fullScreenIntent 在锁屏/熄屏时直接全屏显示，前台时作为 heads-up 通知
         val fullScreenIntent = Intent(context, MainActivity::class.java).apply {
@@ -521,15 +538,30 @@ class AlarmReceiver : BroadcastReceiver() {
             context, 0, fullScreenIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val notification = NotificationCompat.Builder(context, "steam_bun_alarm")
+        val builder = NotificationCompat.Builder(context, "steam_bun_alarm")
             .setContentTitle(title)
             .setContentText(body)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
-            .setFullScreenIntent(fullScreenPendingIntent, true)
-            .build()
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+
+        if (canFullScreen) {
+            builder.setFullScreenIntent(fullScreenPendingIntent, true)
+        } else {
+            // 无全屏权限 — 唤醒屏幕让用户看到高优先级通知
+            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            @Suppress("DEPRECATION")
+            val wl = pm.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "steam_bun:alarm"
+            )
+            wl.acquire(3000)
+            wl.release()
+        }
+
+        val notification = builder.build()
 
         nm.notify(notifId, notification)
     }

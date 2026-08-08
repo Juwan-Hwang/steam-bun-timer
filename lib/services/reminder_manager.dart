@@ -76,6 +76,11 @@ class ReminderManager {
     // 播放语音播报（录音优先，TTS 兜底）
     await _playAnnouncement(request);
 
+    // 🟡3: 播报期间可能被 stop() 中断 — 检查是否仍活跃，防止空转幽灵铃
+    // stop() 会将 _activeReminder 置 null 并取消 _loopTimer
+    // 若不检查，await 返回后仍会启动新 _playAlarmLoop + _loopTimer
+    if (_activeReminder == null) return;
+
     // 动作节点级别：循环铃声 + 振动
     if (request.level == ReminderLevel.action) {
       _playAlarmLoop();

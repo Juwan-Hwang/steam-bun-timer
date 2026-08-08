@@ -3,6 +3,7 @@
 library;
 
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 /// 前台服务回调类型
 typedef KeyCallback = void Function(int keyCode);
@@ -107,11 +108,19 @@ class ForegroundTaskHandler {
     }
   }
 
-  /// 请求通知权限
+  /// 请求通知权限 — 🟡5: 使用 permission_handler 正确请求运行时权限
+  /// 原生侧仅跳转设置页就无条件返回 true，Flutter 侧误判已授权
   Future<bool> requestNotificationPermission() async {
     try {
-      final result = await _channel.invokeMethod<bool>('requestNotificationPermission');
-      return result ?? false;
+      final status = await Permission.notification.request();
+      if (status.isGranted) return true;
+      // 永久拒绝 → 降级到原生设置页跳转
+      if (status.isPermanentlyDenied) {
+        try {
+          await _channel.invokeMethod('requestNotificationPermission');
+        } catch (_) {}
+      }
+      return false;
     } catch (_) {
       return false;
     }
