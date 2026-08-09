@@ -231,19 +231,21 @@ class WeatherService {
   }
 
   /// 通过 IP 定位获取天气 — 原生定位失败时的兜底方案
-  /// 优先用 ip-api.com（对国内 IP 更准），失败再用 ipinfo.io
+  /// 优先用 ipapi.co（HTTPS，对国内 IP 有市级精度），失败再用 ipinfo.io
+  ///
+  /// 使用惰性工厂列表：前一个失败后才发起下一个请求，避免并行浪费
   Future<WeatherTestResult> _requestWeatherByIp(
     String apiKey, String apiHost,
   ) async {
-    // 尝试多个 IP 定位服务，谁先成功用谁
-    final services = <Future<({double lat, double lng, String city})>>[
-      _ipApiCom(),
-      _ipinfoIo(),
+    // 惰性求值 — 前一个失败才创建下一个 Future
+    final services = <Future<({double lat, double lng, String city})> Function()>[
+      _ipapiCo,
+      _ipinfoIo,
     ];
 
-    for (final future in services) {
+    for (final factory in services) {
       try {
-        final loc = await future.timeout(const Duration(seconds: 5));
+        final loc = await factory().timeout(const Duration(seconds: 5));
         debugPrint('[Weather] IP location: ${loc.city} (${loc.lat}, ${loc.lng})');
 
         final result = await _requestWeather(apiKey, apiHost, loc.lng, loc.lat);
@@ -269,14 +271,14 @@ class WeatherService {
     return const WeatherTestResult(success: false, message: '所有 IP 定位服务均失败');
   }
 
-  /// ip-api.com — 对国内 IP 精度更高（市级）
-  Future<({double lat, double lng, String city})> _ipApiCom() async {
-    final resp = await http.get(Uri.parse('http://ip-api.com/json/?lang=zh')).timeout(const Duration(seconds: 5));
+  /// ipapi.co — HTTPS，免费额度充足，对国内 IP 有市级精度
+  Future<({double lat, double lng, String city})> _ipapiCo() async {
+    final resp = await http.get(Uri.parse('https://ipapi.co/json/')).timeout(const Duration(seconds: 5));
     final json = jsonDecode(resp.body) as Map<String, dynamic>;
-    if (json['status'] != 'success') throw Exception('ip-api.com failed');
-    final lat = (json['lat'] as num).toDouble();
-    final lng = (json['lon'] as num).toDouble();
-    final city = json['city'] as String? ?? json['regionName'] as String? ?? '未知';
+    if (json['error'] == true) throw Exception('ipapi.co failed: ${json["reason"]}');
+    final lat = (json['latitude'] as num).toDouble();
+    final lng = (json['longitude'] as num).toDouble();
+    final city = json['city'] as String? ?? json['region'] as String? ?? '未知';
     return (lat: lat, lng: lng, city: city);
   }
 

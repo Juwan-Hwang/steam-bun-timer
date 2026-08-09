@@ -48,11 +48,15 @@ enum VoiceRecognitionState {
 /// 语音指令回调
 typedef VoiceCommandCallback = void Function(VoiceCommand command);
 
+/// 语音快捷启动回调 — 返回配方 ID
+typedef QuickStartCallback = void Function(String recipeId);
+
 class VoiceCommandService {
   VoiceCommandService._();
   static final instance = VoiceCommandService._();
 
   VoiceCommandCallback? onCommand;
+  QuickStartCallback? onQuickStart;
   VoidCallback? onRecognitionFailed;
 
   bool _isInitialized = false;
@@ -280,9 +284,15 @@ class VoiceCommandService {
     if (cmd != null) {
       onCommand?.call(cmd);
     } else {
-      // 未识别的关键词，震动提示
-      _vibrateTwice();
-      onRecognitionFailed?.call();
+      // 尝试快捷启动词 — 说出品种名直接开锅
+      final recipeId = matchQuickStart(keyword);
+      if (recipeId != null) {
+        onQuickStart?.call(recipeId);
+      } else {
+        // 未识别的关键词，震动提示
+        _vibrateTwice();
+        onRecognitionFailed?.call();
+      }
     }
 
     // 重置流以准备下一次识别

@@ -11,6 +11,11 @@ j iā l i ǎng f ēn zh ōng @加两分钟
 zh ēng b ái m án t ou @蒸白馒头
 zh ēng t ián m án t ou @蒸甜馒头
 zh ēng x iǎo m án t ou @蒸小馒头
+# 快捷启动词 - 包子系列
+zh ēng b āo z i @蒸包子
+# 快捷启动词 - 饼子系列
+zh ēng b ái b ǐng z i @蒸白饼子
+zh ēng h óng t áng b ǐng z i @蒸红糖饼子
 j iān b ǐng z i @煎饼子
 
 # 其他控制词

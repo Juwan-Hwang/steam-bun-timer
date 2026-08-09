@@ -35,9 +35,36 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // 正式签名 — 本地用 key.properties，CI 用环境变量
+            signingConfig = signingConfigs.create("release") {
+                val keystorePath = System.getenv("KEYSTORE_PATH")
+                val keystorePwd = System.getenv("KEYSTORE_PASSWORD")
+                val keyAlias = System.getenv("KEY_ALIAS") ?: "steam-bun"
+                val keyPwd = System.getenv("KEY_PASSWORD")
+                if (keystorePath != null) {
+                    storeFile = file(keystorePath)
+                    storePassword = keystorePwd
+                    this.keyAlias = keyAlias
+                    this.keyPassword = keyPwd
+                } else {
+                    // 本地构建：读取 key.properties
+                    val props = java.util.Properties()
+                    val propsFile = rootProject.file("key.properties")
+                    if (propsFile.exists()) {
+                        props.load(propsFile.inputStream())
+                        storeFile = file(props["storeFile"] as String)
+                        storePassword = props["storePassword"] as String
+                        keyAlias = props["keyAlias"] as String
+                        keyPassword = props["keyPassword"] as String
+                    } else {
+                        // 兜底：用 debug 签名（仅本地开发时）
+                        storeFile = signingConfigs.getByName("debug").storeFile
+                        storePassword = "android"
+                        keyAlias = "androiddebugkey"
+                        keyPassword = "android"
+                    }
+                }
+            }
 
             // R8 全量优化 — 代码压缩 + 资源压缩
             isMinifyEnabled = true

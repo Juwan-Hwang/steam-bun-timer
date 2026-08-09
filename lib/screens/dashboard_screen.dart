@@ -45,6 +45,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     voice.onCommand = (cmd) {
       _handleVoiceCommand(cmd);
     };
+    // V2: 语音快捷启动 — 说出品种名直接开锅
+    voice.onQuickStart = (recipeId) {
+      _handleQuickStart(recipeId);
+    };
     // 初始化语音引擎（如果设置中已开启）
     VoiceCommandService.instance.initialize();
   }
@@ -118,8 +122,25 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           ref.read(activeBatchesProvider.notifier).confirmCurrentStep(target.id);
         }
       case VoiceCommand.addTwoMinutes:
-        ref.read(activeBatchesProvider.notifier).adjustDuration(target.id, 2);
+        // 「加两分钟」= 120 秒（adjustDuration 签名为 deltaSeconds）
+        ref.read(activeBatchesProvider.notifier).adjustDuration(target.id, 120);
     }
+  }
+
+  /// 语音快捷启动 — V2 说出品种名直接开始批次
+  void _handleQuickStart(String recipeId) async {
+    final recipe = Recipe.findById(recipeId);
+    if (recipe == null) return;
+
+    // 尝试获取习惯默认值（需异步，温度暂不可得传 null）
+    final habitMinutes = await ref
+        .read(activeBatchesProvider.notifier)
+        .getHabitDefaultMinutes(recipeId, null);
+
+    if (!mounted) return;
+    ref
+        .read(activeBatchesProvider.notifier)
+        .startBatch(recipe, fermentationMinutes: habitMinutes);
   }
 
   @override
