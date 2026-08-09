@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -36,19 +38,21 @@ android {
     buildTypes {
         release {
             // 正式签名 — 本地用 key.properties，CI 用环境变量
+            // 局部变量名必须避开 SigningConfig 的属性名，否则 Kotlin 解析为 val 赋值
+            val ksPath = System.getenv("KEYSTORE_PATH")
+            val ksPwd = System.getenv("KEYSTORE_PASSWORD")
+            val ksAlias = System.getenv("KEY_ALIAS") ?: "steam-bun"
+            val ksKeyPwd = System.getenv("KEY_PASSWORD")
+
             signingConfig = signingConfigs.create("release") {
-                val keystorePath = System.getenv("KEYSTORE_PATH")
-                val keystorePwd = System.getenv("KEYSTORE_PASSWORD")
-                val keyAlias = System.getenv("KEY_ALIAS") ?: "steam-bun"
-                val keyPwd = System.getenv("KEY_PASSWORD")
-                if (keystorePath != null) {
-                    storeFile = file(keystorePath)
-                    storePassword = keystorePwd
-                    this.keyAlias = keyAlias
-                    this.keyPassword = keyPwd
+                if (ksPath != null) {
+                    storeFile = file(ksPath)
+                    storePassword = ksPwd
+                    keyAlias = ksAlias
+                    keyPassword = ksKeyPwd
                 } else {
                     // 本地构建：读取 key.properties
-                    val props = java.util.Properties()
+                    val props = Properties()
                     val propsFile = rootProject.file("key.properties")
                     if (propsFile.exists()) {
                         props.load(propsFile.inputStream())
