@@ -27,6 +27,10 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // 只打包 arm64 — 省去 x86_64/armeabi-v7a 的原生库（sherpa-onnx onnxruntime 各 ~20MB）
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -34,6 +38,14 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+
+            // R8 全量优化 — 代码压缩 + 资源压缩
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }
