@@ -136,7 +136,7 @@ class VoiceCommandService {
       return true;
     } catch (e, stack) {
       debugPrint('[KWS] Initialization failed: $e');
-      debugPrint(stack);
+      debugPrint(stack.toString());
       return false;
     }
   }
