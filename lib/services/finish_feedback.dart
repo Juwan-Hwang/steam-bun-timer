@@ -53,7 +53,8 @@ class FinishFeedback {
         // 自愈：dispose + 重建
         try { await _player.dispose(); } catch (_) {}
         _player = AudioPlayer();
-      _failures = 0;
+        _failures = 0;
+      }
     }
   }
 
@@ -61,5 +62,4 @@ class FinishFeedback {
   static Future<void> dispose() async {
     try { await _player.dispose(); } catch (_) {}
   }
-}
 }
