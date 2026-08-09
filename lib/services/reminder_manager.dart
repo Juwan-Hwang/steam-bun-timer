@@ -195,17 +195,6 @@ VoiceCommandService.instance.setAnnouncing(false);
     ));
   }
 
-  /// 循环播放铃声 — 录音文件缺失时仅靠振动
-  Future<void> _playAlarmLoop() async {
-    try {
-      await _alarmPlayer.setReleaseMode(ReleaseMode.loop);
-      await _alarmPlayer.setVolume(1.0);
-      await _alarmPlayer.play(AssetSource('audio/alarm.mp3'));
-    } catch (_) {
-      // 铃声文件不存在，振动兜底已由 _vibratePattern 处理
-    }
-  }
-
   /// 单声提示音 — 录音文件缺失时静默
   Future<void> _playBeep() async {
     try {

@@ -496,7 +496,7 @@ class MainActivity : FlutterActivity() {
                 }
             }
             locationTimeoutRunnable = null
-            pendingLocationListeners.clear()
+            pendingLocationListeners.removeAll(listeners)
         }
         locationTimeoutRunnable = timeoutRunnable
 
@@ -508,7 +508,7 @@ class MainActivity : FlutterActivity() {
                     // 定位成功 → 移除超时回调，释放 result/listeners 引用
                     mainHandler.removeCallbacks(timeoutRunnable)
                     locationTimeoutRunnable = null
-                    pendingLocationListeners.clear()
+                    pendingLocationListeners.removeAll(listeners)
                     Log.d("MainActivity", "Got fresh location: ${location.latitude},${location.longitude} from ${location.provider} accuracy=${location.accuracy}m")
                     // 清理所有 listener
                     for (l in listeners) {
@@ -535,7 +535,6 @@ class MainActivity : FlutterActivity() {
 
         mainHandler.postDelayed(timeoutRunnable, timeoutMs)
     }
-    }
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -545,6 +544,8 @@ class MainActivity : FlutterActivity() {
         if (isRecording) {
             stopAudioRecording()
         }
+        // 清理静态回调 — 防止持有已销毁 Activity 的引用
+        TimerForegroundService.onMediaKey = null
         // 清理待完成的定位请求 — 防止 listener 泄漏和 timeoutRunnable 触发已失效的 result
         locationTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
         locationTimeoutRunnable = null

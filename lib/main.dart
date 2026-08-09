@@ -53,6 +53,8 @@ class _SteamBunTimerAppState extends ConsumerState<SteamBunTimerApp> {
     AnnouncementPlayer.instance.dispose();
     ReminderManager.instance.dispose();
     FinishFeedback.dispose();
+    ScreenController.instance.dispose();
+    ForegroundTaskHandler.instance.dispose();
     super.dispose();
   }
 

@@ -26,6 +26,12 @@ class ForegroundTaskHandler {
     });
   }
 
+  /// 清理 MethodChannel 监听 — App 销毁时调用
+  void dispose() {
+    onKeyEvent = null;
+    _channel.setMethodCallHandler(null);
+  }
+
   /// 启动前台服务
   /// §5.1: 前台服务保活计时
   Future<void> startForegroundService({

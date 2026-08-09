@@ -15,7 +15,8 @@ class ActiveBatchStorage {
   ActiveBatchStorage._();
   static final instance = ActiveBatchStorage._();
 
-  final _db = AppDatabase();
+  /// 始终获取单例引用 — 避免持有已关闭数据库的陈旧引用
+  AppDatabase get _db => AppDatabase.instance;
 
   /// 保存/更新活跃批次状态 — 完整序列化所有字段
   Future<void> saveBatch(Batch batch) async {

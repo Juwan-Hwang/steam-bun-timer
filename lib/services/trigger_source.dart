@@ -51,5 +51,6 @@ class HardwareKeyTriggerSource implements TriggerSource {
   void stop() {
     _isActive = false;
     ForegroundTaskHandler.instance.onKeyEvent = null;
+    onTrigger = null;
   }
 }

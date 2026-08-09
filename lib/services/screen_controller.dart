@@ -56,4 +56,11 @@ class ScreenController {
   void setBurnInProtection(bool enabled) {
     _burnInProtection = enabled;
   }
+
+  /// 释放 wakelock — App 销毁时调用
+  Future<void> dispose() async {
+    try {
+      await WakelockPlus.disable();
+    } catch (_) {}
+  }
 }

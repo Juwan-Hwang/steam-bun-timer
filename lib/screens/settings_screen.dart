@@ -197,12 +197,13 @@ class SettingsScreen extends ConsumerWidget {
     final hostController = TextEditingController();
     bool isTesting = false;
     String? testMessage;
+    bool sheetClosed = false;
 
     WeatherService.instance.getApiKey().then((key) {
-      keyController.text = key ?? '';
+      if (!sheetClosed) keyController.text = key ?? '';
     });
     WeatherService.instance.getApiHost().then((host) {
-      hostController.text = host ?? '';
+      if (!sheetClosed) hostController.text = host ?? '';
     });
 
     showModalBottomSheet(
@@ -360,6 +361,7 @@ class SettingsScreen extends ConsumerWidget {
         ),
       ),
     ).whenComplete(() {
+      sheetClosed = true;
       keyController.dispose();
       hostController.dispose();
     });

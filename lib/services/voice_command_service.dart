@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart';
@@ -95,7 +96,7 @@ class VoiceCommandService {
       // 复制模型文件到可访问目录
       final modelDir = await _prepareModelFiles();
       if (modelDir == null) {
-        print('[KWS] Failed to prepare model files');
+        debugPrint('[KWS] Failed to prepare model files');
         return false;
       }
 
@@ -131,11 +132,11 @@ class VoiceCommandService {
 
       _isInitialized = true;
       _modelAvailable = true;
-      print('[KWS] Initialized successfully');
+      debugPrint('[KWS] Initialized successfully');
       return true;
     } catch (e, stack) {
-      print('[KWS] Initialization failed: $e');
-      print(stack);
+      debugPrint('[KWS] Initialization failed: $e');
+      debugPrint(stack);
       return false;
     }
   }
@@ -150,7 +151,7 @@ class VoiceCommandService {
         break;
       case 'onError':
         // 录音错误
-        print('[KWS] Recording error: ${call.arguments}');
+        debugPrint('[KWS] Recording error: ${call.arguments}');
         _isEnabled = false;
         await _vibrateTwice();
         onRecognitionFailed?.call();
@@ -181,9 +182,9 @@ class VoiceCommandService {
             final data = await rootBundle.load('assets/models/kws/$file');
             final bytes = data.buffer.asUint8List();
             await File(targetPath).writeAsBytes(bytes);
-            print('[KWS] Copied $file to $targetPath');
+            debugPrint('[KWS] Copied $file to $targetPath');
           } catch (e) {
-            print('[KWS] Failed to copy $file: $e');
+            debugPrint('[KWS] Failed to copy $file: $e');
             if (file.endsWith('.onnx')) {
               return null;
             }
@@ -193,7 +194,7 @@ class VoiceCommandService {
 
       return modelDir.path;
     } catch (e) {
-      print('[KWS] Prepare model files failed: $e');
+      debugPrint('[KWS] Prepare model files failed: $e');
       return null;
     }
   }
@@ -217,13 +218,13 @@ class VoiceCommandService {
       
       if (started == true) {
         _isEnabled = true;
-        print('[KWS] Listening started');
+        debugPrint('[KWS] Listening started');
       } else {
         await _vibrateTwice();
         onRecognitionFailed?.call();
       }
     } catch (e) {
-      print('[KWS] Enable failed: $e');
+      debugPrint('[KWS] Enable failed: $e');
       await _vibrateTwice();
       onRecognitionFailed?.call();
     }
@@ -248,7 +249,7 @@ class VoiceCommandService {
     // 清除 MethodChannel handler — 防止 stopAudioStream 后仍接收 onAudioData
     _channel.setMethodCallHandler(null);
 
-    print('[KWS] Listening stopped, model released');
+    debugPrint('[KWS] Listening stopped, model released');
   }
 
   /// 处理音频数据（PCM 16-bit）
@@ -282,7 +283,7 @@ class VoiceCommandService {
         _handleKeywordDetected(result.keyword);
       }
     } catch (e) {
-      print('[KWS] Process audio error: $e');
+      debugPrint('[KWS] Process audio error: $e');
     }
   }
 
@@ -290,7 +291,7 @@ class VoiceCommandService {
   void _handleKeywordDetected(String keyword) {
     if (_isAnnouncing) return;
 
-    print('[KWS] Detected: $keyword');
+    debugPrint('[KWS] Detected: $keyword');
 
     // 匹配指令 - 根据模型中的关键词格式 @后面的中文
     final cmd = _matchCommand(keyword);
