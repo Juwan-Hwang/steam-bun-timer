@@ -103,13 +103,26 @@ class _BatchCardState extends State<BatchCard>
   }
 
   @override
+  void didUpdateWidget(covariant BatchCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // urgency 变化时调整闪烁动画 — 不在 build() 中操作 Controller
+    final u = _urgency;
+    if (u == CardUrgency.urgent) {
+      if (!_blinkCtrl.isAnimating) _blinkCtrl.repeat(reverse: true);
+    } else {
+      if (_blinkCtrl.isAnimating) _blinkCtrl.stop();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final z = ZephyrThemeExtension.of(context).s;
     final u = _urgency;
 
-    if (u == CardUrgency.urgent) {
+    // didUpdateWidget 已处理动画启停；首次 build 也需检查
+    if (u == CardUrgency.urgent && !_blinkCtrl.isAnimating) {
       _blinkCtrl.repeat(reverse: true);
-    } else {
+    } else if (u != CardUrgency.urgent && _blinkCtrl.isAnimating) {
       _blinkCtrl.stop();
     }
 
@@ -888,7 +901,8 @@ class _BatchCardState extends State<BatchCard>
       return;
     }
 
-    await showModalBottomSheet(
+    try {
+      await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: z.bgElevated,
@@ -996,8 +1010,10 @@ class _BatchCardState extends State<BatchCard>
         ),
       ),
     );
-    // 🟢7: bottom sheet 关闭后释放 controller，防止内存泄漏
-    controller.dispose();
+    } finally {
+      // 🟢7: bottom sheet 关闭后释放 controller，异常路径也不泄漏
+      controller.dispose();
+    }
   }
   /// 收官金 — 完成态与最终按钮的成就色（替代原 success 绿，避免「大绿按钮」观感）
   Color _gold(ZephyrSemantic z) =>

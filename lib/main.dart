@@ -9,6 +9,9 @@ import 'theme/app_tokens.dart';
 import 'screens/dashboard_screen.dart';
 import 'services/screen_controller.dart';
 import 'services/foreground_task_handler.dart';
+import 'services/voice_command_service.dart';
+import 'services/announcement_player.dart';
+import 'services/reminder_manager.dart';
 import 'providers/app_providers.dart';
 
 void main() async {
@@ -38,6 +41,15 @@ class _SteamBunTimerAppState extends ConsumerState<SteamBunTimerApp> {
   void initState() {
     super.initState();
     _recoverBatches();
+  }
+
+  @override
+  void dispose() {
+    // 兜底：App 被销毁时释放所有原生资源
+    VoiceCommandService.instance.dispose();
+    AnnouncementPlayer.instance.dispose();
+    ReminderManager.instance.stop();
+    super.dispose();
   }
 
   /// 崩溃恢复 — §5.1 App 重启后按时间戳重建所有倒计时

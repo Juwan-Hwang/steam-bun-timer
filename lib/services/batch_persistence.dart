@@ -80,6 +80,7 @@ class ActiveBatchStorage {
       'parallelStepType': batch.parallelStep?.node.type.name,
       'parallelStepIsRunning': batch.parallelStep?.isParallelRunning,
       'weatherRetryAt': batch.weatherRetryAt?.toIso8601String(),
+      'weatherRetryCount': batch.weatherRetryCount,
       'steps': batch.steps.map(_stepToJson).toList(),
     };
   }
@@ -127,6 +128,7 @@ class ActiveBatchStorage {
       simmeringEnd: _parseDate(j['simmeringEnd']),
       parallelStep: parallelStep,
       weatherRetryAt: _parseDate(j['weatherRetryAt']),
+      weatherRetryCount: j['weatherRetryCount'] as int? ?? 0,
       steps: steps,
     );
   }

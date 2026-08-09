@@ -48,6 +48,12 @@ class WeatherService {
   static const _prefsKey = 'qweather_api_key';
   static const _prefsHost = 'qweather_api_host';
 
+  /// 天气缓存 — 避免频繁进出品种选择页重复请求
+  /// 缓存有效期 30 分钟（气温变化不剧烈）
+  WeatherData? _cachedWeather;
+  DateTime? _cachedWeatherTime;
+  static const _weatherCacheTtl = Duration(minutes: 30);
+
   /// v7 实时天气端点
   static const _weatherNowPath = '/v7/weather/now';
 
@@ -128,7 +134,18 @@ class WeatherService {
   // ─── 业务调用 ──────────────────────────────────────────────
 
   /// 获取当前位置实时天气 — 后台静默执行，失败返回 null
-  Future<WeatherData?> fetchCurrentWeather() async {
+  ///
+  /// [forceRefresh] 为 true 时跳过缓存，始终发起新请求。
+  /// - 品种选择页的习惯提示 → 用缓存（默认），避免频繁进出重复请求
+  /// - 批次启动时的真实气温采集 → forceRefresh: true，确保发酵时长推荐准确
+  Future<WeatherData?> fetchCurrentWeather({bool forceRefresh = false}) async {
+    // 缓存命中
+    if (!forceRefresh && _cachedWeather != null && _cachedWeatherTime != null &&
+        DateTime.now().difference(_cachedWeatherTime!) < _weatherCacheTtl) {
+      debugPrint('[Weather] cache hit (${_cachedWeather!.temperature}°C, age=${DateTime.now().difference(_cachedWeatherTime!).inMinutes}min)');
+      return _cachedWeather;
+    }
+
     try {
       final apiKey = await _getApiKey();
       final apiHost = await _getApiHost();
@@ -152,6 +169,10 @@ class WeatherService {
           position['latitude'] as double,
         );
         debugPrint('[Weather] API result: success=${result.success}, msg=${result.message}');
+        if (result.success && result.data != null) {
+          _cachedWeather = result.data;
+          _cachedWeatherTime = DateTime.now();
+        }
         return result.success ? result.data : null;
       }
 
@@ -159,6 +180,10 @@ class WeatherService {
       debugPrint('[Weather] native location failed, falling back to IP geolocation');
       final ipResult = await _requestWeatherByIp(apiKey, apiHost);
       debugPrint('[Weather] API result (IP): success=${ipResult.success}, msg=${ipResult.message}');
+      if (ipResult.success && ipResult.data != null) {
+        _cachedWeather = ipResult.data;
+        _cachedWeatherTime = DateTime.now();
+      }
       return ipResult.success ? ipResult.data : null;
     } catch (e) {
       debugPrint('[Weather] fetchCurrentWeather exception: $e');

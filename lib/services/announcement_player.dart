@@ -105,11 +105,17 @@ class AnnouncementPlayer {
   static final instance = AnnouncementPlayer._();
   factory AnnouncementPlayer() => instance;
 
-  final AudioPlayer _audioPlayer = AudioPlayer();
-  final FlutterTts _tts = FlutterTts();
+  AudioPlayer _audioPlayer = AudioPlayer();
+  FlutterTts? _tts;
   final Queue<String> _queue = Queue();
   bool _isPlaying = false;
   bool _ttsReady = false;
+
+  /// _playAudioSegment 连续失败次数 — 达阈值时重建 AudioPlayer 自愈
+  int _consecutiveFailures = 0;
+  static const int _maxConsecutiveFailures = 3;
+
+  FlutterTts get _ttsEngine => _tts ??= FlutterTts();
 
   /// 最新的播报请求 — _isPlaying 时 play() 被跳过，用此字段补播
   AnnouncementRequest? _latestReq;
@@ -169,6 +175,13 @@ class AnnouncementPlayer {
       final ok = await _playAudioSegment(asset);
       if (_generation != myGen) break; // 新 play() 或 stop() 已接管
       if (!ok) {
+        _consecutiveFailures++;
+        if (_consecutiveFailures >= _maxConsecutiveFailures) {
+          // 自愈：dispose + 重建 AudioPlayer，彻底摆脱 native 错误状态
+          try { await _audioPlayer.dispose(); } catch (_) {}
+          _audioPlayer = AudioPlayer();
+          _consecutiveFailures = 0;
+        }
         _queue.clear();
         // 清空 _ttsFallbackText — _playTts(req) 已播放完整文案（含动作段），
         // 若不清空，循环后会再补播一次动作段导致重复
@@ -178,6 +191,8 @@ class AnnouncementPlayer {
         }
         break;
       }
+      // 播放成功 → 重置失败计数
+      _consecutiveFailures = 0;
     }
 
     // 代际不匹配 → 新 play() 已递增代际并启动新队列，新队列 owns _isPlaying
@@ -247,7 +262,7 @@ class AnnouncementPlayer {
     }
   }
 
-  /// TTS 降级播报 — 完整文案
+  /// 重建 AudioPlayer — 连续失败时自愈，避免卡在错误状态
   Future<void> _playTts(AnnouncementRequest req) async {
     await _playTtsText(req.speechText);
   }
@@ -256,10 +271,11 @@ class AnnouncementPlayer {
   Future<void> _playTtsText(String text) async {
     if (!_ttsReady) {
       try {
-        await _tts.setLanguage('zh-CN');
-        await _tts.setSpeechRate(0.45);
-        await _tts.setVolume(1.0);
-        await _tts.setPitch(1.0);
+        final tts = _ttsEngine;
+        await tts.setLanguage('zh-CN');
+        await tts.setSpeechRate(0.45);
+        await tts.setVolume(1.0);
+        await tts.setPitch(1.0);
         _ttsReady = true;
       } catch (_) {
         // TTS 引擎不可用，彻底静默
@@ -267,7 +283,7 @@ class AnnouncementPlayer {
       }
     }
     try {
-      await _tts.speak(text);
+      await _ttsEngine.speak(text);
     } catch (_) {}
   }
 
@@ -278,7 +294,17 @@ class AnnouncementPlayer {
     _latestReq = null;
     _ttsFallbackText = null;
     try { await _audioPlayer.stop(); } catch (_) {}
-    try { await _tts.stop(); } catch (_) {}
+    try { await _tts?.stop(); } catch (_) {}
     _isPlaying = false;
+  }
+
+  /// 释放所有原生资源 — App 销毁时调用
+  Future<void> dispose() async {
+    await stop();
+    try { await _audioPlayer.dispose(); } catch (_) {}
+    try { _tts?.stop(); } catch (_) {}
+    // FlutterTts dispose 释放 native TextToSpeech 连接
+    _tts = null;
+    _ttsReady = false;
   }
 }

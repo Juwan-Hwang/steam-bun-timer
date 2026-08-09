@@ -13,7 +13,11 @@ class FinishFeedback {
   FinishFeedback._();
 
   /// 独立于播报引擎的播放器 — 出锅音效不打断/不被打断川话播报
-  static final AudioPlayer _player = AudioPlayer();
+  static AudioPlayer _player = AudioPlayer();
+
+  /// 连续失败计数 — 达阈值时重建
+  static int _failures = 0;
+  static const int _maxFailures = 3;
 
   /// 触发一次完整的出锅反馈（音效 + 震动）
   static Future<void> celebrate() async {
@@ -42,8 +46,15 @@ class FinishFeedback {
   static Future<void> _playSting() async {
     try {
       await _player.play(AssetSource('audio/finish_sting.mp3'), volume: 1.0);
+      _failures = 0;
     } catch (_) {
-      // 音频文件尚未生成/放入 assets → 静默降级
+      _failures++;
+      if (_failures >= _maxFailures) {
+        // 自愈：dispose + 重建
+        try { await _player.dispose(); } catch (_) {}
+        _player = AudioPlayer();
+        _failures = 0;
+      }
     }
   }
 }

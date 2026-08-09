@@ -72,6 +72,9 @@ class VoiceCommandService {
   /// 音频采集
   static const int _sampleRate = 16000;
 
+  /// 预分配的复用缓冲区 — 避免 ~50Hz 高频分配 Float32List 造成 GC 压力
+  Float32List? _floatBufferCache;
+
   /// 模型是否可用
   bool _modelAvailable = false;
 
@@ -226,20 +229,26 @@ class VoiceCommandService {
     }
   }
 
-  /// 禁用语音唤醒
+  /// 禁用语音唤醒 — 释放 ONNX 模型（数十 MB），避免常驻内存
   Future<void> disable() async {
     _isEnabled = false;
-    
+
     try {
       await _channel.invokeMethod('stopAudioStream');
     } catch (_) {}
 
-    // 重置识别器
-    if (_spotter != null && _stream != null) {
-      _spotter!.reset(_stream!);
-    }
+    // 释放模型资源 — reset 只清状态不释放内存，free 才真正回收
+    _stream?.free();
+    _spotter?.free();
+    _stream = null;
+    _spotter = null;
+    _isInitialized = false;
+    _floatBufferCache = null;
 
-    print('[KWS] Listening stopped');
+    // 清除 MethodChannel handler — 防止 stopAudioStream 后仍接收 onAudioData
+    _channel.setMethodCallHandler(null);
+
+    print('[KWS] Listening stopped, model released');
   }
 
   /// 处理音频数据（PCM 16-bit）
@@ -250,7 +259,11 @@ class VoiceCommandService {
     try {
       // 将 PCM 16-bit 数据转换为 float 样本 (-1.0 ~ 1.0)
       final buffer = Int16List.view(data.buffer);
-      final floatBuffer = Float32List(buffer.length);
+      // 复用预分配的缓冲区，避免高频内存分配
+      final floatBuffer = (_floatBufferCache?.length == buffer.length)
+          ? _floatBufferCache!
+          : Float32List(buffer.length);
+      _floatBufferCache = floatBuffer;
       for (int i = 0; i < buffer.length; i++) {
         floatBuffer[i] = buffer[i] / 32768.0;
       }
@@ -353,13 +366,8 @@ class VoiceCommandService {
     } catch (_) {}
   }
 
-  /// 释放资源
-  void dispose() {
-    disable();
-    _stream?.free();
-    _spotter?.free();
-    _stream = null;
-    _spotter = null;
-    _isInitialized = false;
+  /// 释放资源 — 委托给 disable()，确保模型真正释放
+  Future<void> dispose() async {
+    await disable();
   }
 }

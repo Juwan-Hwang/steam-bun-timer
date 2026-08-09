@@ -359,7 +359,10 @@ class SettingsScreen extends ConsumerWidget {
           ),
         ),
       ),
-    );
+    ).whenComplete(() {
+      keyController.dispose();
+      hostController.dispose();
+    });
   }
 
   Widget _stepRow(ZephyrSemantic z, String num, String text) {

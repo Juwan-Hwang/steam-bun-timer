@@ -184,6 +184,12 @@ class _LongPressNumberTriggerState extends State<LongPressNumberTrigger> {
   OverlayEntry? _progressOverlay;
 
   @override
+  void dispose() {
+    _hideProgress();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onLongPressStart: (_) => _showProgress(context),

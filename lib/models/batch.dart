@@ -93,6 +93,9 @@ class Batch {
   /// 天气获取重试时间戳 — 温度为 null 时每 60 秒重试
   DateTime? weatherRetryAt;
 
+  /// 天气获取重试次数 — 达到上限后停止重试
+  int weatherRetryCount = 0;
+
   Batch({
     required this.id,
     required this.displayNumber,
@@ -191,6 +194,7 @@ class Batch {
     DateTime? simmeringEnd,
     StepRuntime? parallelStep,
     DateTime? weatherRetryAt,
+    int weatherRetryCount = 0,
     required List<StepRuntime> steps,
   }) {
     final batch = Batch(
@@ -212,6 +216,7 @@ class Batch {
     batch.simmeringEnd = simmeringEnd;
     batch.parallelStep = parallelStep;
     batch.weatherRetryAt = weatherRetryAt;
+    batch.weatherRetryCount = weatherRetryCount;
     return batch;
   }
 }

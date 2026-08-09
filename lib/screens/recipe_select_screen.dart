@@ -9,8 +9,6 @@ import '../models/recipe.dart';
 import '../models/batch.dart';
 import '../providers/app_providers.dart';
 import '../services/weather_service.dart';
-import 'dashboard_screen.dart';
-
 class RecipeSelectScreen extends ConsumerStatefulWidget {
   const RecipeSelectScreen({super.key});
 
@@ -182,9 +180,9 @@ class _RecipeSelectScreenState extends ConsumerState<RecipeSelectScreen> {
   void _start(BuildContext context, Recipe recipe) {
     final habitMinutes = _habitDefaults[recipe.id];
     ref.read(activeBatchesProvider.notifier).startBatch(recipe, fermentationMinutes: habitMinutes);
-    Navigator.pushAndRemoveUntil(context,
-      MaterialPageRoute(builder: (_) => const DashboardScreen()),
-      (_) => false);
+    // pop 回已有的 DashboardScreen — 它 watch activeBatchesProvider，会自动刷新
+    // 不用 pushAndRemoveUntil 创建新 DashboardScreen，否则旧 dispose 会清空新设置的回调
+    Navigator.pop(context);
   }
 
   /// 右滑选择起始状态 — 从任意工序开始，而非只能从发酵开始
@@ -272,18 +270,14 @@ class _RecipeSelectScreenState extends ConsumerState<RecipeSelectScreen> {
     final startIndex = recipe.steps.indexWhere((s) => s.type == startStep.type);
     if (startIndex <= 0) {
       // 从第一步开始，无需调整
-      Navigator.pushAndRemoveUntil(context,
-        MaterialPageRoute(builder: (_) => const DashboardScreen()),
-        (_) => false);
+      Navigator.pop(context);
       return;
     }
 
     // 使用公共方法设置起始状态
     ref.read(activeBatchesProvider.notifier).startFromStepIndex(batch.id, startIndex);
 
-    Navigator.pushAndRemoveUntil(context,
-      MaterialPageRoute(builder: (_) => const DashboardScreen()),
-      (_) => false);
+    Navigator.pop(context);
   }
 
   /// 通用倒计时对话框 — 可编辑名称和时间
@@ -356,9 +350,7 @@ class _RecipeSelectScreenState extends ConsumerState<RecipeSelectScreen> {
                       .setPositionLabel(lastBatch.id, name);
                 }
               }
-              Navigator.pushAndRemoveUntil(context,
-                MaterialPageRoute(builder: (_) => const DashboardScreen()),
-                (_) => false);
+              Navigator.pop(context);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: z.accentPrimary,
@@ -368,6 +360,9 @@ class _RecipeSelectScreenState extends ConsumerState<RecipeSelectScreen> {
           ),
         ],
       ),
-    );
+    ).whenComplete(() {
+      nameCtrl.dispose();
+      minutesCtrl.dispose();
+    });
   }
 }

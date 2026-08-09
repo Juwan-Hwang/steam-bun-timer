@@ -32,6 +32,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     _setupTriggerSources();
   }
 
+  @override
+  void dispose() {
+    // 清除单例回调 — 防止旧 State 销毁后回调悬空
+    HardwareKeyTriggerSource.instance.stop();
+    final voice = VoiceCommandService.instance;
+    voice.onCommand = null;
+    voice.onQuickStart = null;
+    voice.onRecognitionFailed = null;
+    super.dispose();
+  }
+
   /// 设置音量键/蓝牙/语音触发源
   void _setupTriggerSources() {
     final trigger = HardwareKeyTriggerSource.instance;
@@ -49,8 +60,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     voice.onQuickStart = (recipeId) {
       _handleQuickStart(recipeId);
     };
-    // 初始化语音引擎（如果设置中已开启）
-    VoiceCommandService.instance.initialize();
+    // 初始化语音引擎 — 仅在设置中已开启时加载模型，避免数十 MB 常驻内存
+    final settings = ref.read(settingsProvider);
+    if (settings.voiceEnabled) {
+      VoiceCommandService.instance.initialize();
+    }
   }
 
   /// 触发源回调 — 仅关闭提醒，不自动确认下一步
@@ -128,19 +142,23 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   }
 
   /// 语音快捷启动 — V2 说出品种名直接开始批次
-  void _handleQuickStart(String recipeId) async {
-    final recipe = Recipe.findById(recipeId);
-    if (recipe == null) return;
+  Future<void> _handleQuickStart(String recipeId) async {
+    try {
+      final recipe = Recipe.findById(recipeId);
+      if (recipe == null) return;
 
-    // 尝试获取习惯默认值（需异步，温度暂不可得传 null）
-    final habitMinutes = await ref
-        .read(activeBatchesProvider.notifier)
-        .getHabitDefaultMinutes(recipeId, null);
+      // 尝试获取习惯默认值（需异步，温度暂不可得传 null）
+      final habitMinutes = await ref
+          .read(activeBatchesProvider.notifier)
+          .getHabitDefaultMinutes(recipeId, null);
 
-    if (!mounted) return;
-    ref
-        .read(activeBatchesProvider.notifier)
-        .startBatch(recipe, fermentationMinutes: habitMinutes);
+      if (!mounted) return;
+      ref
+          .read(activeBatchesProvider.notifier)
+          .startBatch(recipe, fermentationMinutes: habitMinutes);
+    } catch (e) {
+      debugPrint('[QuickStart] Failed: $e');
+    }
   }
 
   @override

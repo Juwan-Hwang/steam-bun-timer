@@ -142,7 +142,11 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
 final numberPoolProvider = Provider<NumberPool>((ref) => NumberPool(maxCount: 6));
 
 /// 数据库
-final databaseProvider = Provider<AppDatabase>((ref) => AppDatabase());
+final databaseProvider = Provider<AppDatabase>((ref) {
+  final db = AppDatabase();
+  ref.onDispose(db.close);
+  return db;
+});
 
 /// 活跃批次
 final activeBatchesProvider = StateNotifierProvider<ActiveBatchesNotifier, List<Batch>>((ref) {
@@ -159,25 +163,37 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   /// 提醒关闭冷却时间 — 关闭后 30 秒内不重新触发，防止多锅提醒反复出现
   DateTime? _reminderDismissedAt;
 
+  /// 闹钟注册缓存 — {alarmId: triggerAtMillis}，避免每秒重复 IPC
+  final Map<int, int> _registeredAlarms = {};
+
   /// 永久关闭的提醒 key 集合 — `{batchId}:{actionText}`
   /// 用户点击「不再提醒」后加入此集合，该批次该动作不再发出任何提醒
   final Set<String> _permanentlyDismissed = {};
 
   ActiveBatchesNotifier(this.ref) : super([]) {
-    // 每秒检查所有批次状态
-    _checkTimer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
-    // N3: 不再从 onReminderStop 调用 _checkPendingReminders
-    // 改为在 _tick() 末尾调用，避免 stop().then(confirm) 竞态中
-    // 被确认批次自身被重复触发提醒
-    // 加载永久关闭集合
+    // 定时器按需启停 — 空状态不空转
     _loadPermanentlyDismissed();
   }
 
   @override
   void dispose() {
     _checkTimer?.cancel();
-    ReminderManager.instance.onReminderStop = null;
     super.dispose();
+  }
+
+  /// 启动定时器（有活跃批次时）
+  void _ensureTimerRunning() {
+    if (_checkTimer == null || !_checkTimer!.isActive) {
+      _checkTimer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    }
+  }
+
+  /// 停止定时器（无活跃批次时空转优化）
+  void _stopTimerIfIdle() {
+    if (state.isEmpty) {
+      _checkTimer?.cancel();
+      _checkTimer = null;
+    }
   }
 
   /// 设置提醒关闭冷却 — UI 层关闭提醒后调用，30 秒内不重新触发
@@ -272,13 +288,14 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
           changed = true;
         }
 
-        // 🟡5: 温度获取重试 — 首次获取失败后每 60 秒重试
+        // 🟡5: 温度获取重试 — 首次获取失败后每 60 秒重试，最多 5 次
         // 习惯学习依赖温度，温度为 null 时学习全程失效
-        if (batch.temperature == null) {
+        if (batch.temperature == null && batch.weatherRetryCount < 5) {
           final lastAttempt = batch.weatherRetryAt;
           final now = DateTime.now();
           if (lastAttempt == null || now.difference(lastAttempt).inSeconds >= 60) {
             batch.weatherRetryAt = now;
+            batch.weatherRetryCount++;
             _fetchWeather(batch.id);
           }
         }
@@ -379,13 +396,12 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       }
 
       // 8. I1-3: 为 running 步骤刷新 plannedEnd 闹钟
-      // 每秒检查并注册/更新，确保进程被杀后闹钟仍能到点触发
-      // AlarmManager.setExact 是幂等的（FLAG_UPDATE_CURRENT），重复注册无副作用
+      // 仅在 plannedEnd 变化时重新注册，避免每秒无意义 IPC
       if (step.status == StepStatus.running &&
           step.plannedEnd != null &&
           step.plannedEnd!.isAfter(DateTime.now())) {
-        ForegroundTaskHandler.instance.scheduleExactAlarm(
-          id: batch.displayNumber * 10, // I1-4: 当前步骤 slot 0
+        _scheduleAlarmIfChanged(
+          id: batch.displayNumber * 10,
           triggerAt: step.plannedEnd!,
           title: '${batch.displayNumber}号 ${batch.recipe.name}',
           body: _actionTextForStep(step, recipeId: batch.recipe.id),
@@ -397,8 +413,8 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
           pStep.status == StepStatus.running &&
           pStep.plannedEnd != null &&
           pStep.plannedEnd!.isAfter(DateTime.now())) {
-        ForegroundTaskHandler.instance.scheduleExactAlarm(
-          id: batch.displayNumber * 10 + 1, // I1-4: 并行步骤 slot 1
+        _scheduleAlarmIfChanged(
+          id: batch.displayNumber * 10 + 1,
           triggerAt: pStep.plannedEnd!,
           title: '${batch.displayNumber}号 ${batch.recipe.name}',
           body: '该上锅了',
@@ -439,6 +455,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     _startForegroundIfNeeded();
 
     state = [...state, batch];
+    _ensureTimerRunning();
     _persistBatch(batch);
     return batch;
   }
@@ -687,11 +704,10 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     _clearDismissedForBatch(batchId);
     _cleanupBatchCache(batch.displayNumber);
     ActiveBatchStorage.instance.removeBatch(batchId);
-    state = List.from(state)..removeAt(idx);
-    _stopForegroundIfIdle();
-  }
-
-  /// 完成批次后移除
+state = List.from(state)..removeAt(idx);
+_stopForegroundIfIdle();
+_stopTimerIfIdle();
+}
   void removeCompletedBatch(String batchId) {
     final idx = state.indexWhere((b) => b.id == batchId);
     if (idx == -1) return;
@@ -707,11 +723,10 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     _clearDismissedForBatch(batchId);
     _cleanupBatchCache(batch.displayNumber);
     ActiveBatchStorage.instance.removeBatch(batchId);
-    state = List.from(state)..removeAt(idx);
-    _stopForegroundIfIdle();
-  }
-
-  /// 饼子「再来一锅」— §6
+state = List.from(state)..removeAt(idx);
+_stopForegroundIfIdle();
+_stopTimerIfIdle();
+}
   void restartBatch(String batchId) {
     final idx = state.indexWhere((b) => b.id == batchId);
     if (idx == -1) return;
@@ -823,6 +838,26 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   void _cancelBatchAlarms(int displayNumber) {
     ForegroundTaskHandler.instance.cancelExactAlarm(displayNumber * 10);
     ForegroundTaskHandler.instance.cancelExactAlarm(displayNumber * 10 + 1);
+    _registeredAlarms.remove(displayNumber * 10);
+    _registeredAlarms.remove(displayNumber * 10 + 1);
+  }
+
+  /// 仅在 triggerAt 变化时才注册闹钟，避免每秒无意义 MethodChannel IPC
+  void _scheduleAlarmIfChanged({
+    required int id,
+    required DateTime triggerAt,
+    required String title,
+    required String body,
+  }) {
+    final millis = triggerAt.millisecondsSinceEpoch;
+    if (_registeredAlarms[id] == millis) return;
+    _registeredAlarms[id] = millis;
+    ForegroundTaskHandler.instance.scheduleExactAlarm(
+      id: id,
+      triggerAt: triggerAt,
+      title: title,
+      body: body,
+    );
   }
 
   void _advanceToNext(Batch batch, int idx, {bool autoAdvance = false}) {
@@ -903,6 +938,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       ActiveBatchStorage.instance.removeBatch(batch.id);
       // 无活跃批次时停止前台服务
       _stopForegroundIfIdle();
+      _stopTimerIfIdle();
     }
   }
 
@@ -1099,7 +1135,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   Future<void> _fetchWeather(String batchId) async {
     try {
       debugPrint('[Weather] _fetchWeather started for batch=$batchId');
-      final data = await WeatherService.instance.fetchCurrentWeather();
+      final data = await WeatherService.instance.fetchCurrentWeather(forceRefresh: true);
       debugPrint('[Weather] fetchCurrentWeather returned: $data');
       final idx = state.indexWhere((b) => b.id == batchId);
       if (idx == -1) {
@@ -1114,6 +1150,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       state[idx].temperature = data.temperature;
       state[idx].humidity = data.humidity;
       state[idx].weatherSource = data.source.name;
+      state[idx].weatherRetryCount = 0;
       state = List.of(state);
       debugPrint('[Weather] temperature=${data.temperature}°C humidity=${data.humidity}% source=${data.source.name}');
       // 🟡6: 持久化温度/湿度，重启后不丢失（连带习惯学习依赖温度）
@@ -1305,6 +1342,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
 }
 
 /// 倒计时 tick — 每秒更新 UI
-final tickProvider = StreamProvider<int>((ref) {
+/// autoDispose: 无活跃批次时自动停止定时器，避免 1Hz 空转
+final tickProvider = StreamProvider.autoDispose<int>((ref) {
   return Stream.periodic(const Duration(seconds: 1), (c) => c);
 });

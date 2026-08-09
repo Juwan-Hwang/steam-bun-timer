@@ -30,6 +30,9 @@ class CompletionCelebration {
           if (entry.mounted) entry.remove();
           onDone?.call();
         },
+        onDisposed: () {
+          if (entry.mounted) entry.remove();
+        },
       ),
     );
     overlay.insert(entry);
@@ -40,11 +43,14 @@ class _CelebrationOverlay extends StatefulWidget {
   final String title;
   final String? subtitle;
   final VoidCallback onDone;
+  /// Widget 销毁时调用 — 用于移除 OverlayEntry
+  final VoidCallback? onDisposed;
 
   const _CelebrationOverlay({
     required this.title,
     this.subtitle,
     required this.onDone,
+    this.onDisposed,
   });
 
   @override
@@ -90,6 +96,7 @@ class _CelebrationOverlayState extends State<_CelebrationOverlay>
   @override
   void dispose() {
     _ctrl.dispose();
+    widget.onDisposed?.call();
     super.dispose();
   }
 

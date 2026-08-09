@@ -21,6 +21,8 @@ import android.location.LocationListener
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
@@ -160,6 +162,10 @@ class MainActivity : FlutterActivity() {
     private var isRecording = false
     private var recordingThread: Thread? = null
 
+    // 定位清理 — 存储待清理的 listeners 和超时 Runnable
+    private val pendingLocationListeners = mutableListOf<LocationListener>()
+    private var locationTimeoutRunnable: Runnable? = null
+
     private fun startAudioRecording(sampleRate: Int): Boolean {
         if (isRecording) return true
 
@@ -217,9 +223,15 @@ class MainActivity : FlutterActivity() {
 
     private fun stopAudioRecording() {
         isRecording = false
-        recordingThread?.join(1000)
+        // 先 stop() 解除 read() 阻塞，再 join() 等线程退出，最后 release()
+        // 顺序不能反：release() 时线程可能还在 read() 中 → SIGSEGV
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        recordingThread?.join(2000)
+        if (recordingThread?.isAlive == true) {
+            Log.w("MainActivity", "Recording thread still alive after join(2000), interrupting")
+            recordingThread?.interrupt()
+        }
         recordingThread = null
-        audioRecord?.stop()
         audioRecord?.release()
         audioRecord = null
     }
@@ -469,11 +481,35 @@ class MainActivity : FlutterActivity() {
         var settled = false
         val listeners = mutableListOf<LocationListener>()
 
+        // 超时兜底 — 先定义，listener 中可引用以提前移除
+        val timeoutRunnable = Runnable {
+            if (!settled) {
+                settled = true
+                for (l in listeners) {
+                    try { lm.removeUpdates(l) } catch (_: Exception) {}
+                }
+                Log.w("MainActivity", "All providers timed out, bestLast=${bestLast?.latitude},${bestLast?.longitude}")
+                if (bestLast != null) {
+                    result.success(mapOf("latitude" to bestLast!!.latitude, "longitude" to bestLast!!.longitude, "provider" to bestLast!!.provider))
+                } else {
+                    result.error("TIMEOUT", "定位超时", null)
+                }
+            }
+            locationTimeoutRunnable = null
+            pendingLocationListeners.clear()
+        }
+        locationTimeoutRunnable = timeoutRunnable
+        pendingLocationListeners.addAll(listeners)
+
         for (p in enabledProviders) {
             val listener = object : LocationListener {
                 override fun onLocationChanged(location: Location) {
                     if (settled) return
                     settled = true
+                    // 定位成功 → 移除超时回调，释放 result/listeners 引用
+                    mainHandler.removeCallbacks(timeoutRunnable)
+                    locationTimeoutRunnable = null
+                    pendingLocationListeners.clear()
                     Log.d("MainActivity", "Got fresh location: ${location.latitude},${location.longitude} from ${location.provider} accuracy=${location.accuracy}m")
                     // 清理所有 listener
                     for (l in listeners) {
@@ -495,24 +531,29 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        // 超时兜底
-        mainHandler.postDelayed({
-            if (!settled) {
-                settled = true
-                for (l in listeners) {
-                    try { lm.removeUpdates(l) } catch (_: Exception) {}
-                }
-                Log.w("MainActivity", "All providers timed out, bestLast=${bestLast?.latitude},${bestLast?.longitude}")
-                if (bestLast != null) {
-                    result.success(mapOf("latitude" to bestLast!!.latitude, "longitude" to bestLast!!.longitude, "provider" to bestLast!!.provider))
-                } else {
-                    result.error("TIMEOUT", "定位超时", null)
-                }
-            }
-        }, timeoutMs)
+        mainHandler.postDelayed(timeoutRunnable, timeoutMs)
+    }
     }
 
-    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // 兜底：Activity 被系统回收时释放麦克风资源
+        if (isRecording) {
+            stopAudioRecording()
+        }
+        // 清理待完成的定位请求 — 防止 listener 泄漏和 timeoutRunnable 触发已失效的 result
+        locationTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        locationTimeoutRunnable = null
+        if (pendingLocationListeners.isNotEmpty()) {
+            val lm = getSystemService(LOCATION_SERVICE) as? LocationManager
+            for (l in pendingLocationListeners) {
+                try { lm?.removeUpdates(l) } catch (_: Exception) {}
+            }
+            pendingLocationListeners.clear()
+        }
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     //  P3-1: 屏幕亮度控制 — 真正调用 WindowManager

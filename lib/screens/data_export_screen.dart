@@ -31,10 +31,12 @@ class _DataExportScreenState extends ConsumerState<DataExportScreen> {
   Future<void> _loadRecords() async {
     final db = ref.read(databaseProvider);
     final records = await db.getAllBatchRecords();
-    setState(() {
-      _records = records;
-      _loading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _records = records;
+        _loading = false;
+      });
+    }
   }
 
   /// 获取用户可见的导出目录 — 优先公共下载目录，兜底 App 外部存储

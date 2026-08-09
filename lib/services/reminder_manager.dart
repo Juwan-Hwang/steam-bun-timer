@@ -45,7 +45,11 @@ class ReminderManager {
   ReminderManager._();
   static final instance = ReminderManager._();
 
-  final AudioPlayer _alarmPlayer = AudioPlayer();
+  AudioPlayer _alarmPlayer = AudioPlayer();
+
+  /// _alarmPlayer 连续失败次数 — 达阈值时重建
+  int _alarmFailures = 0;
+  static const int _maxAlarmFailures = 3;
 
   /// 当前活跃的提醒
   ReminderRequest? _activeReminder;
@@ -56,9 +60,6 @@ class ReminderManager {
 
   /// 循环播报定时器
   Timer? _loopTimer;
-
-  /// 停止提醒回调（由 UI 层设置）
-  VoidCallback? onReminderStop;
 
   /// 开始提醒
   Future<void> start(ReminderRequest request) async {
@@ -120,30 +121,33 @@ class ReminderManager {
 
   /// 播放完整音乐
   Future<void> _playAlarmFull() async {
+    final completer = Completer<void>();
+    StreamSubscription? subscription;
+
     try {
       await _alarmPlayer.setReleaseMode(ReleaseMode.release);
       await _alarmPlayer.setVolume(1.0);
-      
-      // 创建Completer来等待播放完成
-      final completer = Completer<void>();
-      late StreamSubscription subscription;
-      
+
       subscription = _alarmPlayer.onPlayerComplete.listen((_) {
-        subscription.cancel();
         if (!completer.isCompleted) completer.complete();
       });
-      
-      // 开始播放
+
       await _alarmPlayer.play(AssetSource('audio/alarm.mp3'));
-      
-      // 同时触发振动
       _vibratePattern();
-      
-      // 等待播放完成（最多等待10秒）
+
       await completer.future.timeout(const Duration(seconds: 10), onTimeout: () {});
+      _alarmFailures = 0; // 播放成功 → 重置
     } catch (_) {
-      // 铃声文件不存在，振动兜底
+      _alarmFailures++;
+      if (_alarmFailures >= _maxAlarmFailures) {
+        // 自愈：dispose + 重建
+        try { await _alarmPlayer.dispose(); } catch (_) {}
+        _alarmPlayer = AudioPlayer();
+        _alarmFailures = 0;
+      }
       _vibratePattern();
+    } finally {
+      await subscription?.cancel();
     }
   }
 
@@ -172,10 +176,9 @@ class ReminderManager {
   /// 停止所有提醒
   Future<void> stop() async {
     await _stopInternal();
-    // 恢复语音识别
-    VoiceCommandService.instance.setAnnouncing(false);
-    onReminderStop?.call();
-  }
+// 恢复语音识别
+VoiceCommandService.instance.setAnnouncing(false);
+}
 
   /// 播放语音播报
   Future<void> _playAnnouncement(ReminderRequest request) async {
