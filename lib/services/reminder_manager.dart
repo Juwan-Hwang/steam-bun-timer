@@ -180,6 +180,12 @@ class ReminderManager {
 VoiceCommandService.instance.setAnnouncing(false);
 }
 
+  /// 释放原生音频资源 — App 销毁时调用
+  Future<void> dispose() async {
+    await stop();
+    try { await _alarmPlayer.dispose(); } catch (_) {}
+  }
+
   /// 播放语音播报
   Future<void> _playAnnouncement(ReminderRequest request) async {
     await AnnouncementPlayer.instance.play(AnnouncementRequest(

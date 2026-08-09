@@ -4,6 +4,7 @@
 /// V3: 最终工序（揭锅/出锅）金色收官按钮 + 通关庆祝（动效+音效+震动）
 library;
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_tokens.dart';
@@ -65,11 +66,14 @@ class _BatchCardState extends State<BatchCard>
       vsync: this,
       duration: const Duration(milliseconds: 600),
     );
-    // 防烧屏微移 — 每分钟一个周期
+    // 防烧屏微移 — 每分钟一个周期（仅在开启时运行，避免 60fps 空转）
     _burnInCtrl = AnimationController(
       vsync: this,
       duration: const Duration(minutes: 1),
-    )..repeat();
+    );
+    if (ScreenController.instance.burnInProtection) {
+      _burnInCtrl.repeat();
+    }
   }
 
   @override
@@ -111,6 +115,12 @@ class _BatchCardState extends State<BatchCard>
       if (!_blinkCtrl.isAnimating) _blinkCtrl.repeat(reverse: true);
     } else {
       if (_blinkCtrl.isAnimating) _blinkCtrl.stop();
+    }
+    // 防烧屏开关变化时启停微移动画 — 避免关闭后仍 60fps 空转
+    if (ScreenController.instance.burnInProtection) {
+      if (!_burnInCtrl.isAnimating) _burnInCtrl.repeat();
+    } else {
+      if (_burnInCtrl.isAnimating) _burnInCtrl.stop();
     }
   }
 
@@ -1051,20 +1061,26 @@ class _FinalActionButton extends StatefulWidget {
 class _FinalActionButtonState extends State<_FinalActionButton>
     with SingleTickerProviderStateMixin {
   late final AnimationController _shimmer;
+  Timer? _shimmerTimer;
   bool _pressed = false;
 
   @override
   void initState() {
     super.initState();
-    // 流光每 2.4 秒扫过一次
+    // 流光每 2.4 秒扫过一次，间隔 5.6 秒间歇 → 降低 70% 无意义帧重建
     _shimmer = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2400),
-    )..repeat();
+    );
+    _shimmer.forward(from: 0.0);
+    _shimmerTimer = Timer.periodic(const Duration(milliseconds: 8000), (_) {
+      if (mounted) _shimmer.forward(from: 0.0);
+    });
   }
 
   @override
   void dispose() {
+    _shimmerTimer?.cancel();
     _shimmer.dispose();
     super.dispose();
   }

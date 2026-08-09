@@ -499,7 +499,6 @@ class MainActivity : FlutterActivity() {
             pendingLocationListeners.clear()
         }
         locationTimeoutRunnable = timeoutRunnable
-        pendingLocationListeners.addAll(listeners)
 
         for (p in enabledProviders) {
             val listener = object : LocationListener {
@@ -530,6 +529,9 @@ class MainActivity : FlutterActivity() {
                 Log.w("MainActivity", "No permission for $p: ${e.message}")
             }
         }
+
+        // 将已注册的 listeners 存入 pendingLocationListeners — 供 onDestroy 兜底清理
+        pendingLocationListeners.addAll(listeners)
 
         mainHandler.postDelayed(timeoutRunnable, timeoutMs)
     }

@@ -53,8 +53,13 @@ class FinishFeedback {
         // 自愈：dispose + 重建
         try { await _player.dispose(); } catch (_) {}
         _player = AudioPlayer();
-        _failures = 0;
-      }
+      _failures = 0;
     }
   }
+
+  /// 释放原生音频资源 — App 销毁时调用
+  static Future<void> dispose() async {
+    try { await _player.dispose(); } catch (_) {}
+  }
+}
 }

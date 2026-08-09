@@ -12,6 +12,7 @@ import 'services/foreground_task_handler.dart';
 import 'services/voice_command_service.dart';
 import 'services/announcement_player.dart';
 import 'services/reminder_manager.dart';
+import 'services/finish_feedback.dart';
 import 'providers/app_providers.dart';
 
 void main() async {
@@ -37,6 +38,8 @@ class SteamBunTimerApp extends ConsumerStatefulWidget {
 }
 
 class _SteamBunTimerAppState extends ConsumerState<SteamBunTimerApp> {
+  bool _systemUIApplied = false;
+
   @override
   void initState() {
     super.initState();
@@ -48,7 +51,8 @@ class _SteamBunTimerAppState extends ConsumerState<SteamBunTimerApp> {
     // 兜底：App 被销毁时释放所有原生资源
     VoiceCommandService.instance.dispose();
     AnnouncementPlayer.instance.dispose();
-    ReminderManager.instance.stop();
+    ReminderManager.instance.dispose();
+    FinishFeedback.dispose();
     super.dispose();
   }
 
@@ -57,12 +61,8 @@ class _SteamBunTimerAppState extends ConsumerState<SteamBunTimerApp> {
     await ref.read(activeBatchesProvider.notifier).restoreFromPersistence();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final settings = ref.watch(settingsProvider);
-    final isDark = settings.darkMode;
-
-    // 根据主题设置状态栏样式 - 浅色模式下状态栏背景为浅色
+  /// 根据主题设置状态栏样式 — 仅在 darkMode 变化时调用，避免每次 build 都触发平台通道
+  void _applySystemUI(bool isDark) {
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
       statusBarColor: isDark ? Colors.transparent : Colors.white.withOpacity(0.9),
       statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
@@ -70,6 +70,25 @@ class _SteamBunTimerAppState extends ConsumerState<SteamBunTimerApp> {
       systemNavigationBarColor: isDark ? Colors.transparent : Colors.white.withOpacity(0.9),
       systemNavigationBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
     ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = ref.watch(settingsProvider);
+    final isDark = settings.darkMode;
+
+    // 仅在 darkMode 变化时更新系统 UI，而非每次 build 都调用
+    ref.listen(settingsProvider, (prev, next) {
+      if (prev?.darkMode != next.darkMode) {
+        _applySystemUI(next.darkMode);
+      }
+    });
+
+    // 首次 build 设置初始样式
+    if (!_systemUIApplied) {
+      _systemUIApplied = true;
+      _applySystemUI(isDark);
+    }
 
     return MaterialApp(
       title: '蒸馒头计时器',
