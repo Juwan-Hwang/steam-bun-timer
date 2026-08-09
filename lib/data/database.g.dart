@@ -215,6 +215,17 @@ class $BatchRecordsTable extends BatchRecords
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _weatherSourceMeta = const VerificationMeta(
+    'weatherSource',
+  );
+  @override
+  late final GeneratedColumn<String> weatherSource = GeneratedColumn<String>(
+    'weather_source',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
   );
@@ -320,6 +331,7 @@ class $BatchRecordsTable extends BatchRecords
     simmeringIntervalMinutes,
     temperature,
     humidity,
+    weatherSource,
     createdAt,
     season,
     adjustmentMinutes,
@@ -496,6 +508,15 @@ class $BatchRecordsTable extends BatchRecords
         humidity.isAcceptableOrUnknown(data['humidity']!, _humidityMeta),
       );
     }
+    if (data.containsKey('weather_source')) {
+      context.handle(
+        _weatherSourceMeta,
+        weatherSource.isAcceptableOrUnknown(
+          data['weather_source']!,
+          _weatherSourceMeta,
+        ),
+      );
+    }
     if (data.containsKey('created_at')) {
       context.handle(
         _createdAtMeta,
@@ -646,6 +667,10 @@ class $BatchRecordsTable extends BatchRecords
         DriftSqlType.int,
         data['${effectivePrefix}humidity'],
       ),
+      weatherSource: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}weather_source'],
+      ),
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
@@ -706,6 +731,7 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
   final int? simmeringIntervalMinutes;
   final double? temperature;
   final int? humidity;
+  final String? weatherSource;
   final DateTime createdAt;
   final String season;
   final int adjustmentMinutes;
@@ -733,6 +759,7 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
     this.simmeringIntervalMinutes,
     this.temperature,
     this.humidity,
+    this.weatherSource,
     required this.createdAt,
     required this.season,
     required this.adjustmentMinutes,
@@ -792,6 +819,9 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
     }
     if (!nullToAbsent || humidity != null) {
       map['humidity'] = Variable<int>(humidity);
+    }
+    if (!nullToAbsent || weatherSource != null) {
+      map['weather_source'] = Variable<String>(weatherSource);
     }
     map['created_at'] = Variable<DateTime>(createdAt);
     map['season'] = Variable<String>(season);
@@ -863,6 +893,9 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
       humidity: humidity == null && nullToAbsent
           ? const Value.absent()
           : Value(humidity),
+      weatherSource: weatherSource == null && nullToAbsent
+          ? const Value.absent()
+          : Value(weatherSource),
       createdAt: Value(createdAt),
       season: Value(season),
       adjustmentMinutes: Value(adjustmentMinutes),
@@ -918,6 +951,7 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
       ),
       temperature: serializer.fromJson<double?>(json['temperature']),
       humidity: serializer.fromJson<int?>(json['humidity']),
+      weatherSource: serializer.fromJson<String?>(json['weatherSource']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       season: serializer.fromJson<String>(json['season']),
       adjustmentMinutes: serializer.fromJson<int>(json['adjustmentMinutes']),
@@ -958,6 +992,7 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
       ),
       'temperature': serializer.toJson<double?>(temperature),
       'humidity': serializer.toJson<int?>(humidity),
+      'weatherSource': serializer.toJson<String?>(weatherSource),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'season': serializer.toJson<String>(season),
       'adjustmentMinutes': serializer.toJson<int>(adjustmentMinutes),
@@ -992,6 +1027,7 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
     Value<int?> simmeringIntervalMinutes = const Value.absent(),
     Value<double?> temperature = const Value.absent(),
     Value<int?> humidity = const Value.absent(),
+    Value<String?> weatherSource = const Value.absent(),
     DateTime? createdAt,
     String? season,
     int? adjustmentMinutes,
@@ -1039,6 +1075,9 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
         : this.simmeringIntervalMinutes,
     temperature: temperature.present ? temperature.value : this.temperature,
     humidity: humidity.present ? humidity.value : this.humidity,
+    weatherSource: weatherSource.present
+        ? weatherSource.value
+        : this.weatherSource,
     createdAt: createdAt ?? this.createdAt,
     season: season ?? this.season,
     adjustmentMinutes: adjustmentMinutes ?? this.adjustmentMinutes,
@@ -1106,6 +1145,9 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
           ? data.temperature.value
           : this.temperature,
       humidity: data.humidity.present ? data.humidity.value : this.humidity,
+      weatherSource: data.weatherSource.present
+          ? data.weatherSource.value
+          : this.weatherSource,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       season: data.season.present ? data.season.value : this.season,
       adjustmentMinutes: data.adjustmentMinutes.present
@@ -1148,6 +1190,7 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
           ..write('simmeringIntervalMinutes: $simmeringIntervalMinutes, ')
           ..write('temperature: $temperature, ')
           ..write('humidity: $humidity, ')
+          ..write('weatherSource: $weatherSource, ')
           ..write('createdAt: $createdAt, ')
           ..write('season: $season, ')
           ..write('adjustmentMinutes: $adjustmentMinutes, ')
@@ -1182,6 +1225,7 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
     simmeringIntervalMinutes,
     temperature,
     humidity,
+    weatherSource,
     createdAt,
     season,
     adjustmentMinutes,
@@ -1213,6 +1257,7 @@ class BatchRecord extends DataClass implements Insertable<BatchRecord> {
           other.simmeringIntervalMinutes == this.simmeringIntervalMinutes &&
           other.temperature == this.temperature &&
           other.humidity == this.humidity &&
+          other.weatherSource == this.weatherSource &&
           other.createdAt == this.createdAt &&
           other.season == this.season &&
           other.adjustmentMinutes == this.adjustmentMinutes &&
@@ -1244,6 +1289,7 @@ class BatchRecordsCompanion extends UpdateCompanion<BatchRecord> {
   final Value<int?> simmeringIntervalMinutes;
   final Value<double?> temperature;
   final Value<int?> humidity;
+  final Value<String?> weatherSource;
   final Value<DateTime> createdAt;
   final Value<String> season;
   final Value<int> adjustmentMinutes;
@@ -1272,6 +1318,7 @@ class BatchRecordsCompanion extends UpdateCompanion<BatchRecord> {
     this.simmeringIntervalMinutes = const Value.absent(),
     this.temperature = const Value.absent(),
     this.humidity = const Value.absent(),
+    this.weatherSource = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.season = const Value.absent(),
     this.adjustmentMinutes = const Value.absent(),
@@ -1301,6 +1348,7 @@ class BatchRecordsCompanion extends UpdateCompanion<BatchRecord> {
     this.simmeringIntervalMinutes = const Value.absent(),
     this.temperature = const Value.absent(),
     this.humidity = const Value.absent(),
+    this.weatherSource = const Value.absent(),
     required DateTime createdAt,
     required String season,
     this.adjustmentMinutes = const Value.absent(),
@@ -1336,6 +1384,7 @@ class BatchRecordsCompanion extends UpdateCompanion<BatchRecord> {
     Expression<int>? simmeringIntervalMinutes,
     Expression<double>? temperature,
     Expression<int>? humidity,
+    Expression<String>? weatherSource,
     Expression<DateTime>? createdAt,
     Expression<String>? season,
     Expression<int>? adjustmentMinutes,
@@ -1368,6 +1417,7 @@ class BatchRecordsCompanion extends UpdateCompanion<BatchRecord> {
         'simmering_interval_minutes': simmeringIntervalMinutes,
       if (temperature != null) 'temperature': temperature,
       if (humidity != null) 'humidity': humidity,
+      if (weatherSource != null) 'weather_source': weatherSource,
       if (createdAt != null) 'created_at': createdAt,
       if (season != null) 'season': season,
       if (adjustmentMinutes != null) 'adjustment_minutes': adjustmentMinutes,
@@ -1401,6 +1451,7 @@ class BatchRecordsCompanion extends UpdateCompanion<BatchRecord> {
     Value<int?>? simmeringIntervalMinutes,
     Value<double?>? temperature,
     Value<int?>? humidity,
+    Value<String?>? weatherSource,
     Value<DateTime>? createdAt,
     Value<String>? season,
     Value<int>? adjustmentMinutes,
@@ -1432,6 +1483,7 @@ class BatchRecordsCompanion extends UpdateCompanion<BatchRecord> {
           simmeringIntervalMinutes ?? this.simmeringIntervalMinutes,
       temperature: temperature ?? this.temperature,
       humidity: humidity ?? this.humidity,
+      weatherSource: weatherSource ?? this.weatherSource,
       createdAt: createdAt ?? this.createdAt,
       season: season ?? this.season,
       adjustmentMinutes: adjustmentMinutes ?? this.adjustmentMinutes,
@@ -1509,6 +1561,9 @@ class BatchRecordsCompanion extends UpdateCompanion<BatchRecord> {
     if (humidity.present) {
       map['humidity'] = Variable<int>(humidity.value);
     }
+    if (weatherSource.present) {
+      map['weather_source'] = Variable<String>(weatherSource.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -1564,6 +1619,7 @@ class BatchRecordsCompanion extends UpdateCompanion<BatchRecord> {
           ..write('simmeringIntervalMinutes: $simmeringIntervalMinutes, ')
           ..write('temperature: $temperature, ')
           ..write('humidity: $humidity, ')
+          ..write('weatherSource: $weatherSource, ')
           ..write('createdAt: $createdAt, ')
           ..write('season: $season, ')
           ..write('adjustmentMinutes: $adjustmentMinutes, ')
@@ -2642,6 +2698,7 @@ typedef $$BatchRecordsTableCreateCompanionBuilder =
       Value<int?> simmeringIntervalMinutes,
       Value<double?> temperature,
       Value<int?> humidity,
+      Value<String?> weatherSource,
       required DateTime createdAt,
       required String season,
       Value<int> adjustmentMinutes,
@@ -2672,6 +2729,7 @@ typedef $$BatchRecordsTableUpdateCompanionBuilder =
       Value<int?> simmeringIntervalMinutes,
       Value<double?> temperature,
       Value<int?> humidity,
+      Value<String?> weatherSource,
       Value<DateTime> createdAt,
       Value<String> season,
       Value<int> adjustmentMinutes,
@@ -2779,6 +2837,11 @@ class $$BatchRecordsTableFilterComposer
 
   ColumnFilters<int> get humidity => $composableBuilder(
     column: $table.humidity,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get weatherSource => $composableBuilder(
+    column: $table.weatherSource,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2922,6 +2985,11 @@ class $$BatchRecordsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get weatherSource => $composableBuilder(
+    column: $table.weatherSource,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
@@ -3056,6 +3124,11 @@ class $$BatchRecordsTableAnnotationComposer
   GeneratedColumn<int> get humidity =>
       $composableBuilder(column: $table.humidity, builder: (column) => column);
 
+  GeneratedColumn<String> get weatherSource => $composableBuilder(
+    column: $table.weatherSource,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
 
@@ -3140,6 +3213,7 @@ class $$BatchRecordsTableTableManager
                 Value<int?> simmeringIntervalMinutes = const Value.absent(),
                 Value<double?> temperature = const Value.absent(),
                 Value<int?> humidity = const Value.absent(),
+                Value<String?> weatherSource = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<String> season = const Value.absent(),
                 Value<int> adjustmentMinutes = const Value.absent(),
@@ -3168,6 +3242,7 @@ class $$BatchRecordsTableTableManager
                 simmeringIntervalMinutes: simmeringIntervalMinutes,
                 temperature: temperature,
                 humidity: humidity,
+                weatherSource: weatherSource,
                 createdAt: createdAt,
                 season: season,
                 adjustmentMinutes: adjustmentMinutes,
@@ -3198,6 +3273,7 @@ class $$BatchRecordsTableTableManager
                 Value<int?> simmeringIntervalMinutes = const Value.absent(),
                 Value<double?> temperature = const Value.absent(),
                 Value<int?> humidity = const Value.absent(),
+                Value<String?> weatherSource = const Value.absent(),
                 required DateTime createdAt,
                 required String season,
                 Value<int> adjustmentMinutes = const Value.absent(),
@@ -3226,6 +3302,7 @@ class $$BatchRecordsTableTableManager
                 simmeringIntervalMinutes: simmeringIntervalMinutes,
                 temperature: temperature,
                 humidity: humidity,
+                weatherSource: weatherSource,
                 createdAt: createdAt,
                 season: season,
                 adjustmentMinutes: adjustmentMinutes,

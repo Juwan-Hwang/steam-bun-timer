@@ -14,7 +14,7 @@ enum StepType {
   /// 蒸制 — 有倒计时
   steaming,
 
-  /// 焖制 — 无倒计时、无闹钟，后台静默计时
+  /// 焖制 — 有倒计时，到时间响铃一次
   simmering,
 
   /// 翻面（饼子）— 有倒计时
@@ -110,184 +110,176 @@ class Recipe {
     required this.announcementName,
   });
 
+  // ── 工序链工厂 — 消除重复定义 ──
+
+  /// 馒头/包子类工序链：发酵 → 烧水(并行) → 蒸制 → 焖制 → 揭锅
+  static List<StepNode> _steamedBunSteps(int fermentationMinutes) => [
+    StepNode(
+      type: StepType.fermentation,
+      label: '发酵',
+      defaultDurationMinutes: fermentationMinutes,
+      entryCondition: '点「开始」（记录时间戳）',
+      uiState: '卡片进入发酵态（蓝）',
+      requiresConfirmation: true,
+    ),
+    StepNode(
+      type: StepType.boiling,
+      label: '烧水',
+      defaultDurationMinutes: 5,
+      entryCondition: '发酵剩 3 min',
+      uiState: '卡片显示「已开始烧水」大按钮（黄）',
+      announcementAction: '该烧水了',
+      timeoutMinutes: 2,
+      timeoutBehavior: '2 分钟后每 30 秒间歇提醒直到确认',
+      requiresConfirmation: true,
+      isParallel: true,
+      parallelTrigger: (StepType.fermentation, 3),
+    ),
+    StepNode(
+      type: StepType.steaming,
+      label: '蒸制',
+      defaultDurationMinutes: 15,
+      entryCondition: '烧水完成（并行）',
+      uiState: '卡片显示「已开始蒸」大按钮（黄）',
+      announcementAction: '该上锅了',
+      timeoutMinutes: 2,
+      timeoutBehavior: '同上',
+      requiresConfirmation: true,
+    ),
+    StepNode(
+      type: StepType.simmering,
+      label: '焖制',
+      defaultDurationMinutes: 5,
+      entryCondition: '蒸制完成',
+      uiState: '卡片显示「焖制中」（静默计时，到时间响铃）',
+      announcementAction: '该关火了',
+      requiresConfirmation: false,
+    ),
+    StepNode(
+      type: StepType.uncover,
+      label: '揭锅',
+      entryCondition: '焖制后母亲揭锅',
+      uiState: '卡片完成态（绿）',
+      announcementAction: '可以揭锅了',
+      requiresConfirmation: true,
+    ),
+  ];
+
+  /// 饼子类工序链：发酵 → 翻面 → 出锅
+  static List<StepNode> _flatbreadSteps(int fermentationMinutes) => [
+    StepNode(
+      type: StepType.fermentation,
+      label: '发酵',
+      defaultDurationMinutes: fermentationMinutes,
+      entryCondition: '点「开始」（记录时间戳）',
+      uiState: '卡片进入发酵态（蓝）',
+      requiresConfirmation: true,
+    ),
+    StepNode(
+      type: StepType.flipping,
+      label: '翻面',
+      defaultDurationMinutes: 4,
+      entryCondition: '发酵完成',
+      uiState: '卡片进入翻面态（蓝）',
+      announcementAction: '该翻面了',
+      requiresConfirmation: true,
+    ),
+    StepNode(
+      type: StepType.plateOut,
+      label: '出锅',
+      defaultDurationMinutes: 4,
+      entryCondition: '翻面完成',
+      uiState: '卡片显示「已出锅」大按钮',
+      announcementAction: '可以出锅了',
+      requiresConfirmation: true,
+    ),
+  ];
+
+  // ── 预置模板 ──
+
   /// 白馒头模板
-  static const whiteBun = Recipe(
+  static final whiteBun = Recipe(
     id: 'white_bun',
     name: '白馒头',
     announcementName: '白馒头',
     fermentationRange: (15, 45),
-    steps: [
-      StepNode(
-        type: StepType.fermentation,
-        label: '发酵',
-        defaultDurationMinutes: 30,
-        entryCondition: '点「开始」（记录时间戳）',
-        uiState: '卡片进入发酵态（蓝）',
-        requiresConfirmation: true,
-      ),
-      StepNode(
-        type: StepType.boiling,
-        label: '烧水',
-        defaultDurationMinutes: 5,
-        entryCondition: '发酵剩 3 min',
-        uiState: '卡片显示「已开始烧水」大按钮（黄）',
-        announcementAction: '该烧水了',
-        timeoutMinutes: 2,
-        timeoutBehavior: '2 分钟后每 30 秒间歇提醒直到确认',
-        requiresConfirmation: true,
-        isParallel: true,
-        parallelTrigger: (StepType.fermentation, 3),
-      ),
-      StepNode(
-        type: StepType.steaming,
-        label: '蒸制',
-        defaultDurationMinutes: 15,
-        entryCondition: '烧水完成（并行）',
-        uiState: '卡片显示「已开始蒸」大按钮（黄）',
-        announcementAction: '该上锅了',
-        timeoutMinutes: 2,
-        timeoutBehavior: '同上',
-        requiresConfirmation: true,
-      ),
-      StepNode(
-        type: StepType.simmering,
-        label: '焖制',
-        defaultDurationMinutes: 5,
-        entryCondition: '蒸制完成',
-        uiState: '卡片显示「焖制中」（静默，无倒计时）',
-        announcementAction: '该关火了',
-        requiresConfirmation: false,
-      ),
-      StepNode(
-        type: StepType.uncover,
-        label: '揭锅',
-        entryCondition: '焖制后母亲揭锅',
-        uiState: '卡片完成态（绿）',
-        announcementAction: '可以揭锅了',
-        requiresConfirmation: true,
-      ),
-    ],
+    steps: _steamedBunSteps(30),
   );
 
   /// 甜馒头模板
-  static const sweetBun = Recipe(
+  static final sweetBun = Recipe(
     id: 'sweet_bun',
     name: '甜馒头',
     announcementName: '甜馒头',
     fermentationRange: (15, 45),
-    steps: [
-      StepNode(
-        type: StepType.fermentation,
-        label: '发酵',
-        defaultDurationMinutes: 28,
-        entryCondition: '点「开始」（记录时间戳）',
-        uiState: '卡片进入发酵态（蓝）',
-        requiresConfirmation: true,
-      ),
-      StepNode(
-        type: StepType.boiling,
-        label: '烧水',
-        defaultDurationMinutes: 5,
-        entryCondition: '发酵剩 3 min',
-        uiState: '卡片显示「已开始烧水」大按钮（黄）',
-        announcementAction: '该烧水了',
-        timeoutMinutes: 2,
-        timeoutBehavior: '2 分钟后每 30 秒间歇提醒直到确认',
-        requiresConfirmation: true,
-        isParallel: true,
-        parallelTrigger: (StepType.fermentation, 3),
-      ),
-      StepNode(
-        type: StepType.steaming,
-        label: '蒸制',
-        defaultDurationMinutes: 15,
-        entryCondition: '烧水完成（并行）',
-        uiState: '卡片显示「已开始蒸」大按钮（黄）',
-        announcementAction: '该上锅了',
-        timeoutMinutes: 2,
-        timeoutBehavior: '同上',
-        requiresConfirmation: true,
-      ),
-      StepNode(
-        type: StepType.simmering,
-        label: '焖制',
-        defaultDurationMinutes: 5,
-        entryCondition: '蒸制完成',
-        uiState: '卡片显示「焖制中」（静默，无倒计时）',
-        announcementAction: '该关火了',
-        requiresConfirmation: false,
-      ),
-      StepNode(
-        type: StepType.uncover,
-        label: '揭锅',
-        entryCondition: '焖制后母亲揭锅',
-        uiState: '卡片完成态（绿）',
-        announcementAction: '可以揭锅了',
-        requiresConfirmation: true,
-      ),
-    ],
+    steps: _steamedBunSteps(28),
   );
 
   /// 小馒头模板
-  static const smallBun = Recipe(
+  static final smallBun = Recipe(
     id: 'small_bun',
     name: '小馒头',
     announcementName: '小馒头',
     fermentationRange: (20, 60),
+    steps: _steamedBunSteps(40),
+  );
+
+  /// 包子模板 — 流程同馒头，默认发酵 25min
+  static final baozi = Recipe(
+    id: 'baozi',
+    name: '包子',
+    announcementName: '包子',
+    fermentationRange: (15, 45),
+    steps: _steamedBunSteps(25),
+  );
+
+  /// 白饼子模板 — 发酵 15min → 翻面 → 出锅
+  static final whiteFlatbread = Recipe(
+    id: 'white_flatbread',
+    name: '白饼子',
+    announcementName: '饼子',
+    fermentationRange: (10, 40),
+    steps: _flatbreadSteps(15),
+  );
+
+  /// 红糖饼子模板 — 发酵 20min → 翻面 → 出锅
+  static final brownSugarFlatbread = Recipe(
+    id: 'brown_sugar_flatbread',
+    name: '红糖饼子',
+    announcementName: '饼子',
+    fermentationRange: (10, 40),
+    steps: _flatbreadSteps(20),
+  );
+
+  /// 通用倒计时模板 — 用于其他事项，默认无名称但可编辑
+  static const genericTimer = Recipe(
+    id: 'generic_timer',
+    name: '通用倒计时',
+    announcementName: '计时',
+    fermentationRange: (1, 180),
     steps: [
       StepNode(
         type: StepType.fermentation,
-        label: '发酵',
-        defaultDurationMinutes: 40,
-        entryCondition: '点「开始」（记录时间戳）',
-        uiState: '卡片进入发酵态（蓝）',
+        label: '倒计时',
+        defaultDurationMinutes: 10,
+        entryCondition: '点「开始」',
+        uiState: '卡片显示倒计时',
         requiresConfirmation: true,
-      ),
-      StepNode(
-        type: StepType.boiling,
-        label: '烧水',
-        defaultDurationMinutes: 5,
-        entryCondition: '发酵剩 3 min',
-        uiState: '卡片显示「已开始烧水」大按钮（黄）',
-        announcementAction: '该烧水了',
-        timeoutMinutes: 2,
-        timeoutBehavior: '2 分钟后每 30 秒间歇提醒直到确认',
-        requiresConfirmation: true,
-        isParallel: true,
-        parallelTrigger: (StepType.fermentation, 3),
-      ),
-      StepNode(
-        type: StepType.steaming,
-        label: '蒸制',
-        defaultDurationMinutes: 15,
-        entryCondition: '烧水完成（并行）',
-        uiState: '卡片显示「已开始蒸」大按钮（黄）',
-        announcementAction: '该上锅了',
-        timeoutMinutes: 2,
-        timeoutBehavior: '同上',
-        requiresConfirmation: true,
-      ),
-      StepNode(
-        type: StepType.simmering,
-        label: '焖制',
-        defaultDurationMinutes: 5,
-        entryCondition: '蒸制完成',
-        uiState: '卡片显示「焖制中」（静默，无倒计时）',
-        announcementAction: '该关火了',
-        requiresConfirmation: false,
       ),
       StepNode(
         type: StepType.uncover,
-        label: '揭锅',
-        entryCondition: '焖制后母亲揭锅',
-        uiState: '卡片完成态（绿）',
-        announcementAction: '可以揭锅了',
+        label: '完成',
+        entryCondition: '倒计时结束',
+        uiState: '卡片完成态',
+        announcementAction: '时间到了',
         requiresConfirmation: true,
       ),
     ],
   );
 
-  /// 饼子模板
+  // ── 已废弃模板 — 仅用于持久化恢复兼容 ──
+
+  /// 旧饼子模板（无发酵）— 已拆分为白饼子/红糖饼子
   static const flatbread = Recipe(
     id: 'flatbread',
     name: '饼子',
@@ -315,6 +307,31 @@ class Recipe {
     ],
   );
 
-  /// 全部预置模板
-  static const List<Recipe> presets = [whiteBun, sweetBun, smallBun, flatbread];
+  // ── 查询接口 ──
+
+  /// 全部预置模板（用户可选）
+  static final List<Recipe> presets = [
+    whiteBun, sweetBun, smallBun, baozi,
+    whiteFlatbread, brownSugarFlatbread,
+    genericTimer,
+  ];
+
+  /// 按 ID 查找模板（含已废弃，用于持久化恢复）
+  static Recipe? findById(String id) {
+    for (final r in presets) {
+      if (r.id == id) return r;
+    }
+    if (id == 'flatbread') return flatbread;
+    return null;
+  }
+
+  // ── 语义判断 — 避免 UI 层硬编码 recipeId ──
+
+  /// 是否为饼子类（含已废弃的 flatbread）
+  bool get isFlatbread =>
+      steps.any((s) => s.type == StepType.flipping);
+
+  /// 是否为蒸制类（馒头/包子）
+  bool get isSteamedBun =>
+      steps.any((s) => s.type == StepType.steaming);
 }

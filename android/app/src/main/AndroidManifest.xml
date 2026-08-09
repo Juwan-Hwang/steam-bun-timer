@@ -17,8 +17,9 @@
     <!-- 网络访问 — 天气 API -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- 定位 — 天气 API 获取位置 -->
+    <!-- 定位 — 天气 API 获取位置（需要 fine 权限才能用 GPS/Passive Provider） -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- P1-1: 录音 — 语音指令 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 振动 — 识别失败提示 -->

@@ -41,6 +41,9 @@ dependencies:
   # 振动 — 识别失败提示
   vibration: ^2.0.1
 
+  # sherpa-onnx 本地语音识别
+  sherpa_onnx: ^1.10.38
+
   # 工具
   intl: ^0.20.2
 
@@ -56,3 +59,4 @@ flutter:
 
   assets:
     - assets/audio/
+    - assets/models/kws/

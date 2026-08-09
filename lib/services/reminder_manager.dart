@@ -15,7 +15,7 @@ import 'voice_command_service.dart';
 enum ReminderLevel {
   /// 动作节点 — TTS 循环播报 + 振动 + 红色闪烁
   action,
-  /// 焖制轻提示 — 一声播报，非循环
+  /// 焖制轻提示 — 响铃一次 + 人声播报，非循环，无全屏提醒
   simmeringHint,
   /// 间歇提醒 — 每 30 秒一次
   intermittent,
@@ -75,30 +75,76 @@ class ReminderManager {
     // 播报期间暂停语音识别 — 防止自触发（I2 修复）
     VoiceCommandService.instance.setAnnouncing(true);
 
-    // 播放语音播报（录音优先，TTS 兜底）
-    await _playAnnouncement(request);
-
-    // 🟡3: 播报期间可能被 stop() 中断 — 检查是否仍活跃，防止空转幽灵铃
-    // stop() 会将 _activeReminder 置 null 并取消 _loopTimer
-    // 若不检查，await 返回后仍会启动新 _playAlarmLoop + _loopTimer
-    if (_activeReminder == null) return;
-
-    // 动作节点级别：循环铃声 + 振动
+    // 动作节点级别：音乐-人声循环播放
     if (request.level == ReminderLevel.action) {
-      _playAlarmLoop();
-      _vibratePattern();
-      // 每 8 秒重新播报语音
+      // 先播放一次音乐+人声组合
+      await _playMusicAndVoice(request);
+      
+      // 🟡3: 播报期间可能被 stop() 中断 — 检查是否仍活跃
+      if (_activeReminder == null) return;
+
+      // 每 8 秒循环播放音乐+人声
       _loopTimer?.cancel();
       _loopTimer = Timer.periodic(const Duration(seconds: 8), (_) {
-        _playAnnouncement(request);
-        _vibratePattern();
+        _playMusicAndVoice(request);
       });
     } else if (request.level == ReminderLevel.intermittent) {
-      // 间歇提醒 — 播一次铃声 + 轻振动
+      // 间歇提醒 — 播一次铃声 + 轻振动 + 人声
       _playBeep();
       _vibrateOnce();
+      await _playAnnouncement(request);
+    } else if (request.level == ReminderLevel.simmeringHint) {
+      // 焖制轻提示 — 响铃一次 + 振动 + 人声播报，无全屏提醒
+      _playBeep();
+      _vibrateOnce();
+      await _playAnnouncement(request);
+      // 一次性提醒 — 播完即释放通道，不阻塞后续批次提醒
+      if (_activeReminder == request) {
+        _activeReminder = null;
+        VoiceCommandService.instance.setAnnouncing(false);
+      }
     }
-    // simmeringHint 只播语音，不加铃声/振动
+  }
+
+  /// 人声+音乐循环播放 — 先播放人声，然后播放完整音乐
+  Future<void> _playMusicAndVoice(ReminderRequest request) async {
+    // 1. 先播放人声
+    await _playAnnouncement(request);
+    
+    // 检查是否仍活跃
+    if (_activeReminder == null) return;
+    
+    // 2. 播放完整音乐
+    await _playAlarmFull();
+  }
+
+  /// 播放完整音乐
+  Future<void> _playAlarmFull() async {
+    try {
+      await _alarmPlayer.setReleaseMode(ReleaseMode.release);
+      await _alarmPlayer.setVolume(1.0);
+      
+      // 创建Completer来等待播放完成
+      final completer = Completer<void>();
+      late StreamSubscription subscription;
+      
+      subscription = _alarmPlayer.onPlayerComplete.listen((_) {
+        subscription.cancel();
+        if (!completer.isCompleted) completer.complete();
+      });
+      
+      // 开始播放
+      await _alarmPlayer.play(AssetSource('audio/alarm.mp3'));
+      
+      // 同时触发振动
+      _vibratePattern();
+      
+      // 等待播放完成（最多等待10秒）
+      await completer.future.timeout(const Duration(seconds: 10), onTimeout: () {});
+    } catch (_) {
+      // 铃声文件不存在，振动兜底
+      _vibratePattern();
+    }
   }
 
   /// 内部停止 — 不触发 onReminderStop / setAnnouncing(false)

@@ -12,9 +12,13 @@ class CompletionCelebration {
   CompletionCelebration._();
 
   /// 在屏幕上方播放一次出锅庆祝
-  static void show(BuildContext context, {required String title, String? subtitle}) {
+  /// [onDone] — 动画播放完毕后的回调（用于自动收起卡片）
+  static void show(BuildContext context, {required String title, String? subtitle, VoidCallback? onDone}) {
     // 系统开启「减弱动态效果」时跳过演出 — 音效与震动仍由 FinishFeedback 提供
-    if (MediaQuery.of(context).disableAnimations) return;
+    if (MediaQuery.of(context).disableAnimations) {
+      onDone?.call();
+      return;
+    }
 
     final overlay = Overlay.of(context);
     late OverlayEntry entry;
@@ -24,6 +28,7 @@ class CompletionCelebration {
         subtitle: subtitle,
         onDone: () {
           if (entry.mounted) entry.remove();
+          onDone?.call();
         },
       ),
     );

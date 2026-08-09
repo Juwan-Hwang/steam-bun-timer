@@ -39,3 +39,22 @@ zephyr_ref/
 # Design docs are tracked, but temp files:
 *.tmp
 *.bak
+
+# Temp/build artifacts
+temp_apk/
+*.apk
+!assets/**/*.apk
+sherpa-onnx-*.apk
+steam_bun_data_exported.csv
+test_log.txt
+test_out.txt
+*.png
+!android/app/src/main/res/**/*.png
+!assets/**/*.png
+
+# WorkBuddy
+.workbuddy/
+
+# Crash logs
+hs_err_pid*.log
+replay_pid*.log

@@ -47,10 +47,23 @@ class _SteamBunTimerAppState extends ConsumerState<SteamBunTimerApp> {
 
   @override
   Widget build(BuildContext context) {
+    final settings = ref.watch(settingsProvider);
+    final isDark = settings.darkMode;
+
+    // 根据主题设置状态栏样式 - 浅色模式下状态栏背景为浅色
+    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
+      statusBarColor: isDark ? Colors.transparent : Colors.white.withOpacity(0.9),
+      statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+      statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
+      systemNavigationBarColor: isDark ? Colors.transparent : Colors.white.withOpacity(0.9),
+      systemNavigationBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+    ));
+
     return MaterialApp(
       title: '蒸馒头计时器',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.dark(accent: AccentTheme.purple),
+      theme: isDark ? AppTheme.dark(accent: AccentTheme.purple) : AppTheme.light(accent: AccentTheme.purple),
+      themeMode: isDark ? ThemeMode.dark : ThemeMode.light,
       home: const DashboardScreen(),
     );
   }

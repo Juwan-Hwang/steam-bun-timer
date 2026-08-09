@@ -1,5 +1,6 @@
 package com.steambun.steam_bun_timer
 
+import android.annotation.SuppressLint
 import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,8 +10,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.net.Uri
+import android.location.Location
+import android.location.LocationManager
+import android.location.LocationListener
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
@@ -18,9 +25,6 @@ import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import android.view.WindowManager
-import android.speech.SpeechRecognizer
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
@@ -31,6 +35,7 @@ class MainActivity : FlutterActivity() {
 
     private val CHANNEL_FOREGROUND = "com.steambun.steam_bun_timer/foreground"
     private val CHANNEL_VOICE = "com.steambun.steam_bun_timer/voice"
+    private val CHANNEL_LOCATION = "com.steambun.steam_bun_timer/location"
     private val NOTIFICATION_CHANNEL_ID = "steam_bun_timer"
     private val NOTIFICATION_ID = 1
 
@@ -41,12 +46,6 @@ class MainActivity : FlutterActivity() {
     /// 音量键拦截开关 — 仅在有活跃批次时拦截
     private var interceptVolumeKeys = false
 
-    // P1-1: 语音识别器
-    private var speechRecognizer: SpeechRecognizer? = null
-    private var isListening = false
-    private var restartCount = 0
-    private val maxRestarts = 10  // 连续重启上限，超过后停止
-
     // P3-1: 原始亮度倍数（-1 = 跟随系统）
     private var originalBrightness: Float = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
 
@@ -55,7 +54,7 @@ class MainActivity : FlutterActivity() {
 
         // ── 前台服务 + 音量键 MethodChannel ──
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_FOREGROUND)
-        // 🔴2: 注册 MediaSession 按键回调 — 前台服务 MediaSession 收到后台媒体按键时转发给 Flutter
+        // 注册 MediaSession 按键回调 — 前台服务 MediaSession 收到后台媒体按键时转发给 Flutter
         TimerForegroundService.onMediaKey = { keyCode ->
             methodChannel?.invokeMethod("onKeyEvent", keyCode)
         }
@@ -126,26 +125,103 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // ── 原生定位 MethodChannel — 不依赖 Google Play 服务 ──
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_LOCATION).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getLocation" -> getLocation(result)
+                else -> result.notImplemented()
+            }
+        }
+
         // ── P1-1: 语音指令 MethodChannel ──
+        // sherpa-onnx KWS 音频采集 - 原生层录音，Dart 层识别
         voiceChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_VOICE)
         voiceChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
-                "initialize" -> {
-                    // 检查 SpeechRecognizer 是否可用
-                    val available = SpeechRecognizer.isRecognitionAvailable(this)
-                    result.success(available)
-                }
-                "startListening" -> {
-                    val started = startVoiceListening()
+                "startAudioStream" -> {
+                    val sampleRate = call.argument<Int>("sampleRate") ?: 16000
+                    val started = startAudioRecording(sampleRate)
                     result.success(started)
                 }
-                "stopListening" -> {
-                    stopVoiceListening()
+                "stopAudioStream" -> {
+                    stopAudioRecording()
                     result.success(null)
                 }
                 else -> result.notImplemented()
             }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  P1-1: 音频采集 — 为 sherpa-onnx KWS 提供实时音频流
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private var audioRecord: AudioRecord? = null
+    private var isRecording = false
+    private var recordingThread: Thread? = null
+
+    private fun startAudioRecording(sampleRate: Int): Boolean {
+        if (isRecording) return true
+
+        // 检查录音权限
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1002)
+            return false
+        }
+
+        val bufferSize = AudioRecord.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+
+        try {
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                return false
+            }
+
+            audioRecord?.startRecording()
+            isRecording = true
+
+            // 启动录音线程
+            recordingThread = Thread {
+                val buffer = ByteArray(bufferSize)
+                while (isRecording) {
+                    val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
+                    if (read > 0) {
+                        // 将音频数据发送给 Flutter
+                        val audioData = buffer.copyOf(read)
+                        runOnUiThread {
+                            voiceChannel?.invokeMethod("onAudioData", audioData)
+                        }
+                    }
+                }
+            }
+            recordingThread?.start()
+
+            return true
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to start audio recording: ${e.message}")
+            return false
+        }
+    }
+
+    private fun stopAudioRecording() {
+        isRecording = false
+        recordingThread?.join(1000)
+        recordingThread = null
+        audioRecord?.stop()
+        audioRecord?.release()
+        audioRecord = null
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -169,7 +245,7 @@ class MainActivity : FlutterActivity() {
             KeyEvent.KEYCODE_CALL,            // 5  — 部分蓝牙设备
             KeyEvent.KEYCODE_DPAD_CENTER,     // 23 — 部分蓝牙遥控/车载设备
             KeyEvent.KEYCODE_CAMERA -> {      // 27 — 蓝牙相机快门
-                // 🟢: 仅在有活跃批次时拦截，空闲时不吞线控/接听/快门系统行为
+                // 仅在有活跃批次时拦截，空闲时不吞线控/接听/快门系统行为
                 if (interceptVolumeKeys) {
                     methodChannel?.invokeMethod("onKeyEvent", keyCode)
                     return true
@@ -300,7 +376,7 @@ class MainActivity : FlutterActivity() {
             result.success(true)
             return
         }
-        // 🟡5: 不再无条件返回 true — 跳转设置页后用户可能未授权
+        // 不再无条件返回 true — 跳转设置页后用户可能未授权
         // Flutter 侧已改用 permission_handler 正确请求运行时权限
         // 此方法保留作为 fallback：永久拒绝时跳转设置页
         try {
@@ -333,150 +409,110 @@ class MainActivity : FlutterActivity() {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  P1-1: 语音指令 — Android SpeechRecognizer 关键词识别
-    //  使用系统语音识别做轻量 KWS，识别结果匹配关键词后回调 Flutter
+    //  原生定位 — 使用 Android LocationManager（NETWORK_PROVIDER）
+    //  不依赖 Google Play 服务，室内可用基站/Wi-Fi 定位
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private fun startVoiceListening(): Boolean {
-        if (isListening) return true
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            voiceChannel?.invokeMethod("onRecognitionFailed", null)
-            return false
-        }
+    @SuppressLint("MissingPermission")
+    private fun getLocation(result: MethodChannel.Result) {
+        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
 
-        // 检查录音权限 — 无权限时请求而非直接失败
-        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
+        // 权限检查
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_COARSE_LOCATION)
             != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1001)
-            // 权限结果回调中重新尝试
-            return false
+            result.error("NO_PERMISSION", "缺少定位权限", null)
+            return
         }
 
-        // 连续重启超限 → 通知 Flutter 停用语音
-        if (restartCount >= maxRestarts) {
-            voiceChannel?.invokeMethod("onRecognitionFailed", null)
-            isListening = false
-            return false
+        // 打印所有 Provider 状态用于排查
+        val allProviders = lm.allProviders
+        for (p in allProviders) {
+            Log.d("MainActivity", "Provider: $p, enabled=${lm.isProviderEnabled(p)}")
         }
 
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
-        isListening = true
-        voiceChannel?.invokeMethod("onListeningStarted", null)
-
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        // 1. 先取各 Provider 的最后已知位置（瞬时返回，无需等待）
+        val providers = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER, LocationManager.PASSIVE_PROVIDER)
+        var bestLast: Location? = null
+        for (p in providers) {
+            try {
+                val loc = lm.getLastKnownLocation(p)
+                Log.d("MainActivity", "LastKnown($p): ${loc?.latitude},${loc?.longitude} age=${if (loc != null) (System.currentTimeMillis() - loc.time) / 1000 else "null"}s")
+                if (loc != null && (bestLast == null || loc.time > bestLast!!.time)) {
+                    bestLast = loc
+                }
+            } catch (_: SecurityException) {}
+        }
+        // 最后已知位置在 10 分钟内 → 直接用
+        if (bestLast != null && System.currentTimeMillis() - bestLast!!.time < 10 * 60 * 1000) {
+            Log.d("MainActivity", "Using last known location: ${bestLast!!.latitude},${bestLast!!.longitude} from ${bestLast!!.provider}")
+            result.success(mapOf("latitude" to bestLast!!.latitude, "longitude" to bestLast!!.longitude, "provider" to bestLast!!.provider))
+            return
         }
 
-        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {
-                // 成功开始监听 → 重置重启计数
-                restartCount = 0
-            }
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onError(error: Int) {
-                if (isListening) {
-                    restartCount++
-                    speechRecognizer?.destroy()
-                    speechRecognizer = null
-                    // 延迟 500ms 重启
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        if (isListening) startVoiceListening()
-                    }, 500)
-                }
-            }
-
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (matches != null) {
-                    val matchedCmd = matchVoiceCommand(matches)
-                    if (matchedCmd >= 0) {
-                        voiceChannel?.invokeMethod("onCommand", matchedCmd)
-                    } else {
-                        voiceChannel?.invokeMethod("onRecognitionFailed", null)
-                    }
-                }
-                if (isListening) {
-                    restartCount++
-                    speechRecognizer?.destroy()
-                    speechRecognizer = null
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        if (isListening) startVoiceListening()
-                    }, 300)
-                }
-            }
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (matches != null) {
-                    val matchedCmd = matchVoiceCommand(matches)
-                    if (matchedCmd >= 0) {
-                        voiceChannel?.invokeMethod("onCommand", matchedCmd)
-                        if (isListening) {
-                            restartCount++
-                            speechRecognizer?.destroy()
-                            speechRecognizer = null
-                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                if (isListening) startVoiceListening()
-                            }, 300)
-                        }
-                    }
-                }
-            }
-
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-
-        speechRecognizer?.startListening(intent)
-        return true
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1001) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                // 权限授予 → 重新启动监听
-                val started = startVoiceListening()
-                if (!started) {
-                    // 权限已授予但仍未启动（如重启超限）
-                    voiceChannel?.invokeMethod("onRecognitionFailed", null)
-                }
+        // 2. 并发请求所有可用 Provider — 谁先返回用谁
+        val enabledProviders = providers.filter { 
+            try { lm.isProviderEnabled(it) } catch (_: Exception) { false }
+        }
+        if (enabledProviders.isEmpty()) {
+            if (bestLast != null) {
+                result.success(mapOf("latitude" to bestLast!!.latitude, "longitude" to bestLast!!.longitude, "provider" to bestLast!!.provider))
             } else {
-                // 权限拒绝 → 通知 Flutter
-                voiceChannel?.invokeMethod("onRecognitionFailed", null)
+                result.error("NO_PROVIDER", "无可用定位服务", null)
+            }
+            return
+        }
+
+        Log.d("MainActivity", "Requesting updates from: $enabledProviders")
+        val timeoutMs = 12000L
+        var settled = false
+        val listeners = mutableListOf<LocationListener>()
+
+        for (p in enabledProviders) {
+            val listener = object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    if (settled) return
+                    settled = true
+                    Log.d("MainActivity", "Got fresh location: ${location.latitude},${location.longitude} from ${location.provider} accuracy=${location.accuracy}m")
+                    // 清理所有 listener
+                    for (l in listeners) {
+                        try { lm.removeUpdates(l) } catch (_: Exception) {}
+                    }
+                    result.success(mapOf("latitude" to location.latitude, "longitude" to location.longitude, "provider" to location.provider))
+                }
+                override fun onProviderDisabled(provider: String) {}
+                override fun onProviderEnabled(provider: String) {}
+                @Deprecated("deprecated")
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+            }
+            listeners.add(listener)
+            try {
+                lm.requestLocationUpdates(p, 0L, 0F, listener, mainLooper)
+                Log.d("MainActivity", "Registered listener for $p")
+            } catch (e: SecurityException) {
+                Log.w("MainActivity", "No permission for $p: ${e.message}")
             }
         }
+
+        // 超时兜底
+        mainHandler.postDelayed({
+            if (!settled) {
+                settled = true
+                for (l in listeners) {
+                    try { lm.removeUpdates(l) } catch (_: Exception) {}
+                }
+                Log.w("MainActivity", "All providers timed out, bestLast=${bestLast?.latitude},${bestLast?.longitude}")
+                if (bestLast != null) {
+                    result.success(mapOf("latitude" to bestLast!!.latitude, "longitude" to bestLast!!.longitude, "provider" to bestLast!!.provider))
+                } else {
+                    result.error("TIMEOUT", "定位超时", null)
+                }
+            }
+        }, timeoutMs)
     }
 
-    private fun stopVoiceListening() {
-        isListening = false
-        restartCount = 0
-        speechRecognizer?.stopListening()
-        speechRecognizer?.destroy()
-        speechRecognizer = null
-    }
-
-    /// 匹配语音指令 — 返回 VoiceCommand enum index（0-3），-1 = 未匹配
-    /// 单字「好」不触发，至少「好了」二字才匹配
-    private fun matchVoiceCommand(matches: List<String>): Int {
-        for (text in matches) {
-            val lower = text.lowercase()
-            // 0: startBoiling 「开始烧水」
-            if (lower.contains("烧水") || lower.contains("烧开")) return 0
-            // 1: startSteaming 「开始蒸」
-            if (lower.contains("开始蒸") || lower.contains("上锅")) return 1
-            // 2: done 「好了」/「完成」/「确认」— 不匹配单字「好」
-            if (lower.contains("好了") || lower.contains("完成") || lower.contains("确认") || lower.contains("结束了")) return 2
-            // 3: addTwoMinutes 「加两分钟」
-            if (lower.contains("加两分钟") || lower.contains("加2分钟") || lower.contains("加二分钟")) return 3
-        }
-        return -1
-    }
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     // ═══════════════════════════════════════════════════════════════════════════
     //  P3-1: 屏幕亮度控制 — 真正调用 WindowManager
@@ -521,7 +557,7 @@ class AlarmReceiver : BroadcastReceiver() {
             nm.createNotificationChannel(channel)
         }
 
-        // 🟡7: Android 14+ USE_FULL_SCREEN_INTENT 是受限权限
+        // Android 14+ USE_FULL_SCREEN_INTENT 是受限权限
         // 计时类应用默认授予，但需检查 — 无权限时唤醒屏幕 + 高优先级通知降级
         val canFullScreen = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             nm.canUseFullScreenIntent()
@@ -529,7 +565,7 @@ class AlarmReceiver : BroadcastReceiver() {
             true
         }
 
-        // I2: Android 10+ 限制后台 startActivity — 用 fullScreenIntent 替代
+        // Android 10+ 限制后台 startActivity — 用 fullScreenIntent 替代
         // fullScreenIntent 在锁屏/熄屏时直接全屏显示，前台时作为 heads-up 通知
         val fullScreenIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -551,7 +587,7 @@ class AlarmReceiver : BroadcastReceiver() {
             builder.setFullScreenIntent(fullScreenPendingIntent, true)
         } else {
             // 无全屏权限 — 唤醒屏幕让用户看到高优先级通知
-            // 🔴2 修复：acquire(3000) 已设超时自动释放，不可立即 release()
+            // acquire(3000) 已设超时自动释放，不可立即 release()
             // 立即 release 会导致屏幕瞬间熄灭，唤醒完全失效
             val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
             @Suppress("DEPRECATION")
@@ -562,7 +598,7 @@ class AlarmReceiver : BroadcastReceiver() {
             wl.acquire(3000) // 3 秒后自动释放，不手动 release
         }
 
-        // 🟢9: 设置 ContentIntent — 点击通知可打开 App
+        // 设置 ContentIntent — 点击通知可打开 App
         builder.setContentIntent(fullScreenPendingIntent)
 
         val notification = builder.build()

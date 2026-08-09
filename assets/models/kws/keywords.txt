@@ -1,0 +1,18 @@
+# 蒸馒头计时器自定义关键词
+# 格式: 音素序列 @中文显示
+
+# 基础控制词
+k āi sh ǐ sh āo shu ǐ @开始烧水
+sh àng g uō l e @上锅了
+h ǎo l e @好了
+j iā l i ǎng f ēn zh ōng @加两分钟
+
+# 快捷启动词 - 蒸馒头系列
+zh ēng b ái m án t ou @蒸白馒头
+zh ēng t ián m án t ou @蒸甜馒头
+zh ēng x iǎo m án t ou @蒸小馒头
+j iān b ǐng z i @煎饼子
+
+# 其他控制词
+j ié sh ù l e @结束了
+h ái y ǒu h ǎo j iǔ @还有好久

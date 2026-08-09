@@ -4,6 +4,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:drift/drift.dart' hide Batch;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -32,6 +33,7 @@ class AppSettings {
   final bool burnInProtection;
   final bool simmeringReminder;
   final bool voiceEnabled;
+  final bool darkMode;
 
   const AppSettings({
     this.screenAlwaysOn = true,
@@ -39,6 +41,7 @@ class AppSettings {
     this.burnInProtection = true,
     this.simmeringReminder = true,
     this.voiceEnabled = false,
+    this.darkMode = true,
   });
 
   AppSettings copyWith({
@@ -47,6 +50,7 @@ class AppSettings {
     bool? burnInProtection,
     bool? simmeringReminder,
     bool? voiceEnabled,
+    bool? darkMode,
   }) {
     return AppSettings(
       screenAlwaysOn: screenAlwaysOn ?? this.screenAlwaysOn,
@@ -54,6 +58,7 @@ class AppSettings {
       burnInProtection: burnInProtection ?? this.burnInProtection,
       simmeringReminder: simmeringReminder ?? this.simmeringReminder,
       voiceEnabled: voiceEnabled ?? this.voiceEnabled,
+      darkMode: darkMode ?? this.darkMode,
     );
   }
 
@@ -65,6 +70,7 @@ class AppSettings {
       burnInProtection: prefs.getBool('burnInProtection') ?? true,
       simmeringReminder: prefs.getBool('simmeringReminder') ?? true,
       voiceEnabled: prefs.getBool('voiceEnabled') ?? false,
+      darkMode: prefs.getBool('darkMode') ?? true,
     );
   }
 }
@@ -124,6 +130,11 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     } else {
       VoiceCommandService.instance.disable();
     }
+  }
+
+  void toggleDarkMode() {
+    state = state.copyWith(darkMode: !state.darkMode);
+    _save('darkMode', state.darkMode);
   }
 }
 
@@ -239,14 +250,25 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         }
       }
 
-      // 2. 检查发酵倒计时到点 → 进入评价
+      // 2. 检查发酵倒计时到点 → 进入评价（通用倒计时直接推进到完成）
       if (step.node.type == StepType.fermentation &&
           step.status == StepStatus.running) {
         final remain = step.remainingSeconds;
         if (remain != null && remain <= 0) {
-          step.status = StepStatus.evaluating;
-          step.reminderSentAt = DateTime.now();
-          _triggerReminder(batch, '发酵好了');
+          if (batch.recipe.id == 'generic_timer') {
+            // 通用倒计时 — 跳过评价，直接推进到完成步骤
+            step.status = StepStatus.done;
+            step.actualConfirm = DateTime.now();
+            _triggerReminder(batch, '时间到了');
+            final idx = state.indexWhere((b) => b.id == batch.id);
+            if (idx >= 0) {
+              _advanceToNext(batch, idx);
+            }
+          } else {
+            step.status = StepStatus.evaluating;
+            step.reminderSentAt = DateTime.now();
+            _triggerReminder(batch, '发酵好了');
+          }
           changed = true;
         }
 
@@ -336,7 +358,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
           step.status = StepStatus.done;
           step.reminderSentAt = DateTime.now();
           // 用当前步骤的 announcementAction，不是下一步的
-          _triggerReminder(batch, step.node.announcementAction ?? _actionTextForStep(step));
+          _triggerReminder(batch, step.node.announcementAction ?? _actionTextForStep(step, recipeId: batch.recipe.id));
           changed = true;
         }
       }
@@ -366,7 +388,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
           id: batch.displayNumber * 10, // I1-4: 当前步骤 slot 0
           triggerAt: step.plannedEnd!,
           title: '${batch.displayNumber}号 ${batch.recipe.name}',
-          body: _actionTextForStep(step),
+          body: _actionTextForStep(step, recipeId: batch.recipe.id),
         );
       }
       // 同上：并行 running 步骤也注册闹钟
@@ -423,7 +445,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
 
   /// 确认并行工序（如烧水）— P0-3
   /// 「该烧水了」→ awaitingConfirmation 转 running
-  /// 「该上锅了」→ 烧水已完成，清理并行引用
+  /// 「我开始蒸了」→ 烧水已完成，直接开始蒸制倒计时
   void confirmParallelStep(String batchId) {
     final idx = state.indexWhere((b) => b.id == batchId);
     if (idx == -1) return;
@@ -442,24 +464,37 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
         Duration(minutes: parallel.node.defaultDurationMinutes ?? 5),
       );
     } else if (parallel.status == StepStatus.done) {
-      // 「该上锅了」→ 烧水已完成
+      // 「我开始蒸了」→ 烧水已完成，直接开始蒸制倒计时
       parallel.actualConfirm = DateTime.now();
       batch.parallelStep = null;
-      // 交接后并行步骤即为当前步骤 — 确认后推进到下一步
-      final current = batch.currentStep;
-      if (current?.status == StepStatus.evaluating) {
-        // 发酵仍在评价中 → 自动标记低置信度并推进
+
+      // 找到蒸制步骤并直接启动它
+      final steamingStep = batch.steps.firstWhere(
+        (s) => s.node.type == StepType.steaming,
+        orElse: () => batch.currentStep!,
+      );
+
+      // 如果发酵还在进行中，自动标记为完成（低置信度）
+      final fermentationStep = batch.steps.firstWhere(
+        (s) => s.node.type == StepType.fermentation,
+        orElse: () => batch.currentStep!,
+      );
+      if (fermentationStep.status == StepStatus.running ||
+          fermentationStep.status == StepStatus.awaitingConfirmation) {
         batch.fermentationResult = FermentationResult.perfect;
-        current!.lowConfidence = true;
-        _evaluateFermentationInternal(batch, FermentationResult.perfect);
-      } else if (current?.status == StepStatus.done) {
-        _advanceToNext(batch, idx);
+        fermentationStep.status = StepStatus.done;
+        fermentationStep.actualConfirm = DateTime.now();
+        fermentationStep.lowConfidence = true;
       }
-      // 🟢6 修复：移除 awaitingConfirmation 死代码分支
-      // 该分支不可达 — currentStep 为 awaitingConfirmation 时 parallelStep 已被
-      // _advanceToNext 清空（跳过 done 烧水步骤时 batch.parallelStep = next），
-      // confirmParallelStep 在 parallel == null 时已提前 return。
-      // 蒸制倒计时启动由 confirmCurrentStep 负责处理。
+
+      // 设置蒸制步骤为 running（直接开始倒计时）
+      batch.currentStepIndex = batch.steps.indexOf(steamingStep);
+      steamingStep.status = StepStatus.running;
+      steamingStep.actualStart = DateTime.now();
+      steamingStep.plannedStart = DateTime.now();
+      steamingStep.plannedEnd = DateTime.now().add(
+        Duration(minutes: steamingStep.node.defaultDurationMinutes ?? 15),
+      );
     }
 
     state = List.of(state);
@@ -569,15 +604,16 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   }
 
   /// 微调时长 — §3.1
-  void adjustDuration(String batchId, int deltaMinutes) {
+  /// [deltaSeconds] 调整的秒数，正数增加，负数减少
+  void adjustDuration(String batchId, int deltaSeconds) {
     final idx = state.indexWhere((b) => b.id == batchId);
     if (idx == -1) return;
     final batch = state[idx];
     final current = batch.currentStep;
     if (current == null || current.plannedEnd == null) return;
 
-    current.plannedEnd = current.plannedEnd!.add(Duration(minutes: deltaMinutes));
-    batch.adjustmentMinutes += deltaMinutes;
+    current.plannedEnd = current.plannedEnd!.add(Duration(seconds: deltaSeconds));
+    batch.adjustmentMinutes += deltaSeconds ~/ 60;
 
     // V2: 记录调整行为用于习惯默认值
     final temp = batch.temperature;
@@ -589,10 +625,26 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       HabitDefaultService.instance.recordAdjustment(
         recipeId: batch.recipe.id,
         temperature: temp,
-        adjustmentMinutes: deltaMinutes,
+        adjustmentMinutes: deltaSeconds ~/ 60,
         finalMinutes: finalMinutes,
       );
     }
+
+    state = List.of(state);
+    _persistBatch(batch);
+  }
+
+  /// 微调并行烧水时长 — 评价阶段 / 并行期间调整烧水倒计时
+  /// 微调并行步骤时长（如烧水）
+  /// [deltaSeconds] 调整的秒数，正数增加，负数减少
+  void adjustParallelDuration(String batchId, int deltaSeconds) {
+    final idx = state.indexWhere((b) => b.id == batchId);
+    if (idx == -1) return;
+    final batch = state[idx];
+    final parallel = batch.parallelStep;
+    if (parallel == null || parallel.plannedEnd == null) return;
+
+    parallel.plannedEnd = parallel.plannedEnd!.add(Duration(seconds: deltaSeconds));
 
     state = List.of(state);
     _persistBatch(batch);
@@ -707,6 +759,64 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
     );
   }
 
+  /// 从指定步骤索引开始 — 用于右滑选择起始状态
+  /// 跳过前面所有步骤，根据步骤类型设置正确的初始状态
+  void startFromStepIndex(String batchId, int stepIndex) {
+    final idx = state.indexWhere((b) => b.id == batchId);
+    if (idx == -1) return;
+    final batch = state[idx];
+
+    // 跳过前面所有步骤
+    for (int i = 0; i < stepIndex; i++) {
+      final step = batch.steps[i];
+      step.status = StepStatus.done;
+      step.actualStart ??= DateTime.now();
+      step.actualConfirm ??= DateTime.now();
+    }
+    batch.currentStepIndex = stepIndex;
+
+    // 设置当前步骤状态 — 根据步骤类型处理
+    final current = batch.currentStep;
+    if (current != null) {
+      switch (current.node.type) {
+        case StepType.simmering:
+          // 焖制 — 直接进入静默计时
+          current.status = StepStatus.simmering;
+          current.actualStart = DateTime.now();
+          batch.simmeringEnd = DateTime.now().add(
+            Duration(minutes: current.node.defaultDurationMinutes ?? 5),
+          );
+        case StepType.uncover:
+          // 揭锅 — 如果是最后一步则标记批次完成，否则自动推进
+          current.status = StepStatus.done;
+          current.actualStart = DateTime.now();
+          current.actualConfirm = DateTime.now();
+          if (batch.currentStepIndex < batch.steps.length - 1) {
+            _advanceToNext(batch, idx, autoAdvance: true);
+          } else {
+            // 揭锅是最后一步，标记批次完成
+            batch.status = BatchStatus.completed;
+            batch.completedAt = DateTime.now();
+          }
+        default:
+          if (current.node.defaultDurationMinutes != null) {
+            // 有倒计时的步骤 — 设置为 awaitingConfirmation
+            current.status = StepStatus.awaitingConfirmation;
+            current.actualStart = DateTime.now();
+          } else {
+            // 无倒计时的步骤 — 直接完成并推进
+            current.status = StepStatus.done;
+            current.actualStart = DateTime.now();
+            current.actualConfirm = DateTime.now();
+            _advanceToNext(batch, idx);
+          }
+      }
+    }
+
+    state = List.of(state);
+    _persistBatch(batch);
+  }
+
   // ── 内部方法 ──
 
   /// 🟢: 取消批次的所有精确闹钟（slot 0 + slot 1），防止幻影通知
@@ -761,9 +871,12 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
             Duration(minutes: next.node.defaultDurationMinutes ?? 5),
           );
         case StepType.uncover:
-          // 揭锅 — 等待确认
-          next.status = StepStatus.awaitingConfirmation;
+          // 揭锅 — 焖制结束后自动完成，无需用户确认
+          next.status = StepStatus.done;
           next.actualStart = DateTime.now();
+          next.actualConfirm = DateTime.now();
+          // 自动推进到下一步（出锅或完成）
+          _advanceToNext(batch, idx, autoAdvance: true);
         default:
           next.status = StepStatus.running;
           next.actualStart = DateTime.now();
@@ -918,14 +1031,14 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       // evaluating 不走 _checkPendingReminders — _tick 第 3 节已处理间歇提醒和 5 分钟自动推进
       // 此处重新触发只会导致用户关不掉的循环（看不到评价按钮时尤其严重）
       if (step.status == StepStatus.awaitingConfirmation) {
-        final actionText = step.node.announcementAction ?? _actionTextForStep(step);
+        final actionText = step.node.announcementAction ?? _actionTextForStep(step, recipeId: batch.recipe.id);
         if (_isReminderDismissed(batch.id, actionText)) continue;
         // 🔴1: 蒸制 awaitingConfirmation 恢复提醒（autoAdvance 场景）
         _triggerReminder(batch, actionText);
         return;
       }
       if (step.status == StepStatus.done) {
-        final actionText = _actionTextForStep(step);
+        final actionText = _actionTextForStep(step, recipeId: batch.recipe.id);
         if (_isReminderDismissed(batch.id, actionText)) continue;
         // 根据步骤类型选择正确的提醒级别（轻微级修复）
         if (step.node.type == StepType.simmering) {
@@ -940,7 +1053,11 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
 
   /// 根据步骤类型推导提醒文案
   /// 文案必须与 AnnouncementCatalog.actions 中的 text 匹配才能播放录音
-  String _actionTextForStep(StepRuntime step) {
+  String _actionTextForStep(StepRuntime step, {String? recipeId}) {
+    // 通用倒计时 — 使用自定义文案
+    if (recipeId == 'generic_timer') {
+      return '时间到了';
+    }
     switch (step.node.type) {
       case StepType.fermentation:
         return '发酵好了';
@@ -981,17 +1098,28 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
   /// 后台静默执行：任何失败都不影响 UI，温度记为 null
   Future<void> _fetchWeather(String batchId) async {
     try {
+      debugPrint('[Weather] _fetchWeather started for batch=$batchId');
       final data = await WeatherService.instance.fetchCurrentWeather();
+      debugPrint('[Weather] fetchCurrentWeather returned: $data');
       final idx = state.indexWhere((b) => b.id == batchId);
-      if (idx == -1 || data == null) return;
+      if (idx == -1) {
+        debugPrint('[Weather] batch not found (already completed?)');
+        return;
+      }
+      if (data == null) {
+        debugPrint('[Weather] data is null — API key/host/permission issue');
+        return;
+      }
       // 静默更新温度，不触发额外 UI 抖动
       state[idx].temperature = data.temperature;
       state[idx].humidity = data.humidity;
+      state[idx].weatherSource = data.source.name;
       state = List.of(state);
+      debugPrint('[Weather] temperature=${data.temperature}°C humidity=${data.humidity}% source=${data.source.name}');
       // 🟡6: 持久化温度/湿度，重启后不丢失（连带习惯学习依赖温度）
       await _persistBatch(state[idx]);
-    } catch (_) {
-      // 宁缺数据，不丢数据 — 温度保持 null
+    } catch (e) {
+      debugPrint('[Weather] _fetchWeather exception: $e');
     }
   }
 
@@ -1042,6 +1170,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
       simmeringIntervalMinutes: Value(simmeringInterval),
       temperature: Value(batch.temperature),
       humidity: Value(batch.humidity),
+      weatherSource: Value(batch.weatherSource),
       createdAt: batch.startedAt ?? DateTime.now(),
       season: SeasonUtil.name(SeasonUtil.fromDateTime(batch.startedAt ?? DateTime.now())),
       adjustmentMinutes: Value(batch.adjustmentMinutes),
@@ -1147,7 +1276,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
             id: batch.displayNumber * 10,
             triggerAt: step.plannedEnd!,
             title: '${batch.displayNumber}号 ${batch.recipe.name}',
-            body: _actionTextForStep(step),
+            body: _actionTextForStep(step, recipeId: batch.recipe.id),
           );
         } else if (step.reminderSentAt != null &&
             (step.status == StepStatus.evaluating ||
@@ -1157,7 +1286,7 @@ class ActiveBatchesNotifier extends StateNotifier<List<Batch>> {
             id: batch.displayNumber * 10,
             triggerAt: DateTime.now().add(const Duration(seconds: 5)),
             title: '${batch.displayNumber}号 ${batch.recipe.name}',
-            body: _actionTextForStep(step),
+            body: _actionTextForStep(step, recipeId: batch.recipe.id),
           );
         } else if (step.status == StepStatus.simmering &&
             batch.simmeringEnd != null &&

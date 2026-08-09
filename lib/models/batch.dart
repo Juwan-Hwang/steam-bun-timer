@@ -3,6 +3,7 @@
 library;
 
 import 'recipe.dart';
+import '../services/weather_service.dart';
 
 /// 批次状态
 enum BatchStatus { active, completed, cancelled }
@@ -76,6 +77,9 @@ class Batch {
   FermentationResult? fermentationResult;
   double? temperature;
   int? humidity;
+
+  /// 天气数据来源 — "gps" / "ip" / null(未获取)
+  String? weatherSource;
   int adjustmentMinutes = 0;
   String? positionLabel;
   int currentStepIndex = 0;
@@ -180,11 +184,13 @@ class Batch {
     DateTime? completedAt,
     double? temperature,
     int? humidity,
+    String? weatherSource,
     int adjustmentMinutes = 0,
     String? positionLabel,
     FermentationResult? fermentationResult,
     DateTime? simmeringEnd,
     StepRuntime? parallelStep,
+    DateTime? weatherRetryAt,
     required List<StepRuntime> steps,
   }) {
     final batch = Batch(
@@ -200,10 +206,12 @@ class Batch {
       currentStepIndex: currentStepIndex,
     );
     batch.humidity = humidity;
+    batch.weatherSource = weatherSource;
     batch.adjustmentMinutes = adjustmentMinutes;
     batch.fermentationResult = fermentationResult;
     batch.simmeringEnd = simmeringEnd;
     batch.parallelStep = parallelStep;
+    batch.weatherRetryAt = weatherRetryAt;
     return batch;
   }
 }

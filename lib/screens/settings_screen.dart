@@ -4,6 +4,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_tokens.dart';
 import '../providers/app_providers.dart';
@@ -22,6 +23,9 @@ class SettingsScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: z.isDark ? const Color(0xF718181B) : const Color(0xF2FFFFFF),
+        elevation: 0,
+        systemOverlayStyle: z.isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
         title: Text('设置', style: TextStyle(fontSize: ZephyrFontSize.xl, fontWeight: FontWeight.w400, color: z.textPrimary)),
         leading: IconButton(icon: Icon(Icons.arrow_back, color: z.textPrimary), onPressed: () => Navigator.pop(context)),
       ),
@@ -57,6 +61,11 @@ class SettingsScreen extends ConsumerWidget {
             _nav(z, '充电保护', '部分机型自带充电上限设置，点击跳转系统电池设置', Icons.battery_charging_full, () {
               ForegroundTaskHandler.instance.requestIgnoreBatteryOptimizations();
             }),
+
+            const SizedBox(height: ZephyrSpacing.s6),
+            _section(z, '外观'),
+            _switch(z, '深色模式', '切换深色/浅色主题', settings.darkMode,
+                () => ref.read(settingsProvider.notifier).toggleDarkMode()),
 
             const SizedBox(height: ZephyrSpacing.s6),
             _section(z, 'V2 免触增强'),

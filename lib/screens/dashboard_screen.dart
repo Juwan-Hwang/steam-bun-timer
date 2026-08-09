@@ -3,6 +3,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_tokens.dart';
 import '../providers/app_providers.dart';
@@ -111,7 +112,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             CompletionCelebration.show(
               context,
               title: step.node.type == StepType.plateOut ? '出锅啦！' : '揭锅啦！',
-              subtitle: target.recipe.id == 'flatbread' ? '金黄酥脆 · 趁热吃' : '白白胖胖 · 热气腾腾',
+              subtitle: target.recipe.isFlatbread ? '金黄酥脆 · 趁热吃' : '白白胖胖 · 热气腾腾',
             );
           }
           ref.read(activeBatchesProvider.notifier).confirmCurrentStep(target.id);
@@ -132,9 +133,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       appBar: batches.isEmpty
           ? null
           : AppBar(
+              backgroundColor: z.isDark ? const Color(0xF718181B) : const Color(0xF2FFFFFF),
+              elevation: 0,
+              systemOverlayStyle: z.isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
+              iconTheme: IconThemeData(color: z.textPrimary),
+              actionsIconTheme: IconThemeData(color: z.textPrimary),
               actions: [
                 IconButton(
-                  icon: Icon(Icons.settings, color: z.textSecondary),
+                  icon: Icon(Icons.settings, color: z.textPrimary),
                   onPressed: () => Navigator.push(context,
                       MaterialPageRoute(builder: (_) => const SettingsScreen())),
                 ),
@@ -177,7 +183,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             ),
         ],
       ),
-      floatingActionButton: _hasCapacity(batches) ? _startBtn(z) : _fullBadge(z),
+      // 提醒覆盖层显示时隐藏 FAB — 避免「开始一锅」按钮遮挡全屏提醒
+      floatingActionButton: reminder != null
+          ? null
+          : (_hasCapacity(batches) ? _startBtn(z) : _fullBadge(z)),
     );
   }
 
@@ -219,6 +228,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                 onConfirmParallel: () => ref.read(activeBatchesProvider.notifier).confirmParallelStep(b.id),
                 onEvaluate: (result) => ref.read(activeBatchesProvider.notifier).evaluateFermentation(b.id, result),
                 onAdjustDuration: (delta) => ref.read(activeBatchesProvider.notifier).adjustDuration(b.id, delta),
+                onAdjustParallelDuration: (delta) => ref.read(activeBatchesProvider.notifier).adjustParallelDuration(b.id, delta),
                 onExtendFermentation: (mins) => ref.read(activeBatchesProvider.notifier).extendFermentation(b.id, mins),
                 onSetFermentationMinutes: (mins) => ref.read(activeBatchesProvider.notifier).setFermentationMinutes(b.id, mins),
                 onCancel: () => ref.read(activeBatchesProvider.notifier).cancelBatch(b.id),

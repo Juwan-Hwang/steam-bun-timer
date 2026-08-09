@@ -5,15 +5,32 @@
 library;
 
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
+
+/// 天气数据来源
+enum WeatherSource {
+  /// 原生 LocationManager 定位获取（基站/Wi-Fi/GPS）
+  gps,
+  /// IP 定位兜底
+  ip,
+}
 
 class WeatherData {
   final double temperature;
   final int? humidity;
-  const WeatherData({required this.temperature, this.humidity});
+  final WeatherSource source;
+  const WeatherData({
+    required this.temperature,
+    this.humidity,
+    this.source = WeatherSource.gps,
+  });
+
+  @override
+  String toString() => 'WeatherData(temp=$temperature, humidity=$humidity, source=$source)';
 }
 
 /// API 测试结果
@@ -33,6 +50,9 @@ class WeatherService {
 
   /// v7 实时天气端点
   static const _weatherNowPath = '/v7/weather/now';
+
+  /// 原生定位 MethodChannel
+  static const _locationChannel = MethodChannel('com.steambun.steam_bun_timer/location');
 
   // ─── Key / Host 存取 ───────────────────────────────────────
 
@@ -67,20 +87,14 @@ class WeatherService {
   // ─── 定位权限 ──────────────────────────────────────────────
 
   /// 主动请求定位权限（供设置页"测试"按钮调用）
+  /// 同时请求 ACCESS_FINE_LOCATION + ACCESS_COARSE_LOCATION
   Future<bool> ensureLocationPermission() async {
     try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return false;
-
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        final status = await Permission.locationWhenInUse.request();
-        if (status.isGranted) return true;
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) return false;
-      }
-      if (permission == LocationPermission.deniedForever) return false;
-      return true;
+      // 先请求精确定位（包含 coarse），再请求 coarse 作为兜底
+      final fine = await Permission.location.request();
+      if (fine.isGranted) return true;
+      final coarse = await Permission.locationWhenInUse.request();
+      return coarse.isGranted;
     } catch (_) {
       return false;
     }
@@ -105,8 +119,8 @@ class WeatherService {
 
     final position = await _getPosition();
     // 定位失败时用北京坐标测试（不影响 Key 有效性验证）
-    final lng = position?.longitude ?? 116.41;
-    final lat = position?.latitude ?? 39.92;
+    final lng = position?['longitude'] ?? 116.41;
+    final lat = position?['latitude'] ?? 39.92;
 
     return _requestWeather(apiKey, apiHost, lng, lat, isTest: true);
   }
@@ -118,17 +132,36 @@ class WeatherService {
     try {
       final apiKey = await _getApiKey();
       final apiHost = await _getApiHost();
-      if (apiKey == null || apiKey.isEmpty) return null;
-      if (apiHost == null || apiHost.isEmpty) return null;
+      debugPrint('[Weather] apiKey=${apiKey != null ? "set(${apiKey.length} chars)" : "null"}, apiHost=$apiHost');
+      if (apiKey == null || apiKey.isEmpty) {
+        debugPrint('[Weather] API key not configured');
+        return null;
+      }
+      if (apiHost == null || apiHost.isEmpty) {
+        debugPrint('[Weather] API host not configured');
+        return null;
+      }
 
+      // 1. 原生 LocationManager 定位（基站/Wi-Fi，不依赖 Google Play 服务）
       final position = await _getPosition();
-      if (position == null) return null;
+      debugPrint('[Weather] position=$position');
+      if (position != null) {
+        final result = await _requestWeather(
+          apiKey, apiHost,
+          position['longitude'] as double,
+          position['latitude'] as double,
+        );
+        debugPrint('[Weather] API result: success=${result.success}, msg=${result.message}');
+        return result.success ? result.data : null;
+      }
 
-      final result = await _requestWeather(
-        apiKey, apiHost, position.longitude, position.latitude,
-      );
-      return result.success ? result.data : null;
-    } catch (_) {
+      // 2. 原生定位失败 → IP 定位兜底
+      debugPrint('[Weather] native location failed, falling back to IP geolocation');
+      final ipResult = await _requestWeatherByIp(apiKey, apiHost);
+      debugPrint('[Weather] API result (IP): success=${ipResult.success}, msg=${ipResult.message}');
+      return ipResult.success ? ipResult.data : null;
+    } catch (e) {
+      debugPrint('[Weather] fetchCurrentWeather exception: $e');
       return null;
     }
   }
@@ -197,6 +230,70 @@ class WeatherService {
     }
   }
 
+  /// 通过 IP 定位获取天气 — 原生定位失败时的兜底方案
+  /// 优先用 ip-api.com（对国内 IP 更准），失败再用 ipinfo.io
+  Future<WeatherTestResult> _requestWeatherByIp(
+    String apiKey, String apiHost,
+  ) async {
+    // 尝试多个 IP 定位服务，谁先成功用谁
+    final services = <Future<({double lat, double lng, String city})>>[
+      _ipApiCom(),
+      _ipinfoIo(),
+    ];
+
+    for (final future in services) {
+      try {
+        final loc = await future.timeout(const Duration(seconds: 5));
+        debugPrint('[Weather] IP location: ${loc.city} (${loc.lat}, ${loc.lng})');
+
+        final result = await _requestWeather(apiKey, apiHost, loc.lng, loc.lat);
+        if (result.success && result.data != null) {
+          return WeatherTestResult(
+            success: true,
+            message: 'IP 定位成功(${loc.city}) ${result.data!.temperature.toStringAsFixed(1)}°C'
+                '${result.data!.humidity != null ? "，湿度 ${result.data!.humidity}%" : ""}',
+            data: WeatherData(
+              temperature: result.data!.temperature,
+              humidity: result.data!.humidity,
+              source: WeatherSource.ip,
+            ),
+          );
+        }
+        // 天气 API 失败就没必要换 IP 服务了，直接返回
+        return result;
+      } catch (e) {
+        debugPrint('[Weather] IP service failed: $e, trying next...');
+      }
+    }
+
+    return const WeatherTestResult(success: false, message: '所有 IP 定位服务均失败');
+  }
+
+  /// ip-api.com — 对国内 IP 精度更高（市级）
+  Future<({double lat, double lng, String city})> _ipApiCom() async {
+    final resp = await http.get(Uri.parse('http://ip-api.com/json/?lang=zh')).timeout(const Duration(seconds: 5));
+    final json = jsonDecode(resp.body) as Map<String, dynamic>;
+    if (json['status'] != 'success') throw Exception('ip-api.com failed');
+    final lat = (json['lat'] as num).toDouble();
+    final lng = (json['lon'] as num).toDouble();
+    final city = json['city'] as String? ?? json['regionName'] as String? ?? '未知';
+    return (lat: lat, lng: lng, city: city);
+  }
+
+  /// ipinfo.io — 备用
+  Future<({double lat, double lng, String city})> _ipinfoIo() async {
+    final resp = await http.get(Uri.parse('https://ipinfo.io/json')).timeout(const Duration(seconds: 5));
+    final json = jsonDecode(resp.body) as Map<String, dynamic>;
+    final loc = json['loc'] as String?;
+    if (loc == null || !loc.contains(',')) throw Exception('ipinfo.io no loc');
+    final parts = loc.split(',');
+    final lat = double.tryParse(parts[0]);
+    final lng = double.tryParse(parts[1]);
+    if (lat == null || lng == null) throw Exception('ipinfo.io parse failed');
+    final city = json['city'] as String? ?? '未知';
+    return (lat: lat, lng: lng, city: city);
+  }
+
   /// 和风天气 v7 错误码 → 人类可读信息
   String _errorMessage(String? code) {
     switch (code) {
@@ -219,31 +316,32 @@ class WeatherService {
 
   // ─── 定位 ─────────────────────────────────────────────────
 
-  /// 获取定位（带权限检查和降级处理）
-  Future<Position?> _getPosition() async {
+  /// 通过原生 MethodChannel 获取定位
+  /// 使用 Android LocationManager.NETWORK_PROVIDER（基站/Wi-Fi 定位）
+  /// 不依赖 Google Play 服务，室内可用
+  Future<Map<String, dynamic>?> _getPosition() async {
     try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return null;
-
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        final status = await Permission.locationWhenInUse.request();
-        if (status.isGranted) {
-          permission = LocationPermission.whileInUse;
-        } else {
-          permission = await Geolocator.requestPermission();
-          if (permission == LocationPermission.denied) return null;
+      // 确保定位权限（fine + coarse）
+      final fine = await Permission.location.request();
+      if (!fine.isGranted) {
+        final coarse = await Permission.locationWhenInUse.request();
+        if (!coarse.isGranted) {
+          debugPrint('[Weather] location permission denied');
+          return null;
         }
       }
-      if (permission == LocationPermission.deniedForever) return null;
 
-      return await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.low,
-          timeLimit: Duration(seconds: 5),
-        ),
-      );
-    } catch (_) {
+      final result = await _locationChannel
+          .invokeMethod<Map>('getLocation')
+          .timeout(const Duration(seconds: 12));
+      debugPrint('[Weather] native location: $result');
+      if (result == null) return null;
+      return Map<String, dynamic>.from(result);
+    } on PlatformException catch (e) {
+      debugPrint('[Weather] native location failed: ${e.code} — ${e.message}');
+      return null;
+    } catch (e) {
+      debugPrint('[Weather] _getPosition exception: $e');
       return null;
     }
   }

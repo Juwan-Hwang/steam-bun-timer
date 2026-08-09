@@ -30,6 +30,7 @@ class BatchCard extends StatefulWidget {
   final VoidCallback? onRestart; // 饼子「再来一锅」
   final VoidCallback? onDismiss;  // 完成后从看板移除
   final void Function(String)? onSetPositionLabel;
+  final void Function(int)? onAdjustParallelDuration; // 并行烧水微调
 
   const BatchCard({
     super.key,
@@ -44,6 +45,7 @@ class BatchCard extends StatefulWidget {
     this.onRestart,
     this.onDismiss,
     this.onSetPositionLabel,
+    this.onAdjustParallelDuration,
   });
 
   @override
@@ -153,7 +155,7 @@ class _BatchCardState extends State<BatchCard>
               const SizedBox(height: ZephyrSpacing.s3),
               _parallelActionButton(z),
             ],
-            if (b.isCompleted && b.recipe.id == 'flatbread') ...[
+            if (b.isCompleted && b.recipe.isFlatbread) ...[
               const SizedBox(height: ZephyrSpacing.s3),
               _restartButton(z, accent),
             ],
@@ -263,19 +265,20 @@ class _BatchCardState extends State<BatchCard>
   }
 
   /// 并行双行倒计时 — §1.3
+  /// 双行均带 ±微调按钮：发酵行调发酵时间，烧水行调烧水时间
   Widget _parallelDisplay(ZephyrSemantic z, Color accent, StepRuntime fermentation, StepRuntime boiling) {
     return Column(
       children: [
         // 上行：发酵
-        _dualLine(z, '发酵', fermentation, z.info),
+        _dualLine(z, '发酵', fermentation, z.info, showAdjust: true),
         const SizedBox(height: 4),
         // 下行：烧水
-        _dualLine(z, '烧水', boiling, z.warning),
+        _dualLine(z, '烧水', boiling, z.warning, showAdjust: true, parallel: true),
       ],
     );
   }
 
-  Widget _dualLine(ZephyrSemantic z, String label, StepRuntime s, Color color) {
+  Widget _dualLine(ZephyrSemantic z, String label, StepRuntime s, Color color, {bool showAdjust = false, bool parallel = false}) {
     final r = s.remainingSeconds ?? 0;
     final mins = (r / 60).floor();
     final secs = r % 60;
@@ -297,7 +300,12 @@ class _BatchCardState extends State<BatchCard>
             ),
           ),
         ),
-        Text('剩余', style: TextStyle(fontSize: 10, color: z.textMuted)),
+        if (showAdjust) ...[
+          _adjustBtn(z, '−', -60, parallel: parallel),
+          const SizedBox(width: 4),
+          _adjustBtn(z, '+', 60, parallel: parallel),
+        ] else
+          Text('剩余', style: TextStyle(fontSize: 10, color: z.textMuted)),
       ],
     );
   }
@@ -316,8 +324,7 @@ class _BatchCardState extends State<BatchCard>
         LongPressNumberTrigger(
           onLongPressActivated: () => _showNumberPad(z),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               AnimatedBuilder(
                 animation: _burnInCtrl,
@@ -339,11 +346,39 @@ class _BatchCardState extends State<BatchCard>
                 ),
               ),
               const SizedBox(width: 4),
-              Text('剩余', style: TextStyle(fontSize: 12, color: z.textMuted, fontWeight: FontWeight.w600)),
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('剩余', style: TextStyle(fontSize: 12, color: z.textMuted, fontWeight: FontWeight.w600)),
+              ),
               const Spacer(),
-              _adjustBtn(z, '−', -1),
-              const SizedBox(width: 4),
-              _adjustBtn(z, '+', 1),
+              // 调节按钮：顶部对齐
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 第一排：分钟调节
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _adjustBtn(z, '−', -60),
+                        const SizedBox(width: 4),
+                        _adjustBtn(z, '+', 60),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    // 第二排：30秒调节
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _adjustBtn(z, '−30s', -30),
+                        const SizedBox(width: 4),
+                        _adjustBtn(z, '+30s', 30),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -413,15 +448,74 @@ class _BatchCardState extends State<BatchCard>
   }
 
   /// 评价三选一 — §4.3
+  /// 评价阶段若并行烧水仍在运行，下方显示烧水倒计时 + 微调按钮
   Widget _eval(ZephyrSemantic z, Color accent) {
-    return Row(
+    final parallel = widget.batch.parallelStep;
+    final showBoiling = parallel != null && parallel.status == StepStatus.running;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(child: _evalBtn(z, '正好', z.success, () => widget.onEvaluate?.call(FermentationResult.perfect))),
-        const SizedBox(width: 8),
-        Expanded(child: _evalBtn(z, '还不够', z.warning, () => widget.onEvaluate?.call(FermentationResult.notEnough))),
-        const SizedBox(width: 8),
-        Expanded(child: _evalBtn(z, '发过了', z.danger, () => widget.onEvaluate?.call(FermentationResult.overFermented))),
+        // 提示文案 — 让用户知道发酵已好、需要评价
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Text(
+            '发酵好了，请评价',
+            style: TextStyle(fontSize: ZephyrFontSize.lg, fontWeight: FontWeight.w600, color: accent),
+          ),
+        ),
+        Row(
+          children: [
+            Expanded(child: _evalBtn(z, '正好', z.success, () => widget.onEvaluate?.call(FermentationResult.perfect))),
+            const SizedBox(width: 8),
+            Expanded(child: _evalBtn(z, '还不够', z.warning, () => widget.onEvaluate?.call(FermentationResult.notEnough))),
+            const SizedBox(width: 8),
+            Expanded(child: _evalBtn(z, '发过了', z.danger, () => widget.onEvaluate?.call(FermentationResult.overFermented))),
+          ],
+        ),
+        // 评价阶段仍显示并行烧水倒计时 + 微调按钮
+        if (showBoiling) ...[
+          const SizedBox(height: ZephyrSpacing.s3),
+          _boilingMiniCountdown(z),
+        ],
       ],
+    );
+  }
+
+  /// 评价阶段的紧凑烧水倒计时 — 带微调按钮
+  Widget _boilingMiniCountdown(ZephyrSemantic z) {
+    final parallel = widget.batch.parallelStep!;
+    final r = parallel.remainingSeconds ?? 0;
+    final mins = (r / 60).floor();
+    final secs = r % 60;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: z.warning.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(ZephyrRadius.md),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.water_drop, size: 18, color: z.warning),
+          const SizedBox(width: 8),
+          Text('烧水', style: TextStyle(fontSize: 13, color: z.textSecondary, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w300,
+                color: r <= 0 ? z.danger : z.textPrimary,
+                fontFeatures: const [FontFeature.tabularFigures()],
+                letterSpacing: -1,
+              ),
+            ),
+          ),
+          _adjustBtn(z, '−', -60, parallel: true),
+          const SizedBox(width: 4),
+          _adjustBtn(z, '+', 60, parallel: true),
+        ],
+      ),
     );
   }
 
@@ -581,14 +675,12 @@ class _BatchCardState extends State<BatchCard>
   }
 
   /// P0-3: 并行烧水确认按钮
+  /// 烧水比发酵快时：点击「我开始蒸了」直接开始蒸制倒计时，无需等待发酵完成
   Widget _parallelActionButton(ZephyrSemantic z) {
     final parallel = widget.batch.parallelStep!;
-    final label = parallel.status == StepStatus.awaitingConfirmation
-        ? '已开始烧水'
-        : '已上锅';
-    final color = parallel.status == StepStatus.awaitingConfirmation
-        ? z.warning
-        : z.danger;
+    final isBoilingDone = parallel.status == StepStatus.done;
+    final label = isBoilingDone ? '我开始蒸了' : '我开始烧水了';
+    final color = isBoilingDone ? z.danger : z.warning;
     return SizedBox(
       width: double.infinity,
       height: 72,
@@ -632,36 +724,50 @@ class _BatchCardState extends State<BatchCard>
   ///   1. 立即 heavyImpact 触感（手感）
   ///   2. 鼓点震动 + 出锅音效（FinishFeedback）
   ///   3. 全屏印章庆祝动效（CompletionCelebration）
-  /// 状态推进同步进行，卡片在庆祝层下方切换到完成态
+  /// 动画完毕后自动收起卡片（调用 onDismiss）
   void _handleFinalTap(StepRuntime s) {
     HapticFeedback.heavyImpact();
+    // 通用倒计时 — 简单完成提示，不触发揭锅/出锅庆祝动画
+    if (widget.batch.recipe.id == 'generic_timer') {
+      widget.onConfirm?.call();
+      widget.onDismiss?.call();
+      return;
+    }
     FinishFeedback.celebrate();
     CompletionCelebration.show(
       context,
       title: s.node.type == StepType.plateOut ? '出锅啦！' : '揭锅啦！',
-      subtitle: widget.batch.recipe.id == 'flatbread' ? '金黄酥脆 · 趁热吃' : '白白胖胖 · 热气腾腾',
+      subtitle: widget.batch.recipe.isFlatbread ? '金黄酥脆 · 趁热吃' : '白白胖胖 · 热气腾腾',
+      onDone: () {
+        // 动画完毕 + 状态已推进 → 自动收起卡片
+        widget.onDismiss?.call();
+      },
     );
     widget.onConfirm?.call();
   }
 
   String _actionLabel(StepRuntime s) {
+    // 通用倒计时 — 按钮文案适配
+    if (widget.batch.recipe.id == 'generic_timer') {
+      return '完成';
+    }
     switch (s.node.type) {
       case StepType.fermentation:
         return s.status == StepStatus.evaluating ? '评价' : '确认';
       case StepType.boiling:
-        return '已开始烧水';
+        return '我开始烧水了';
       case StepType.steaming:
         // awaitingConfirmation → 首次确认「已开始蒸」
         // done → 倒计时结束「已关火」
-        return s.status == StepStatus.done ? '已关火' : '已开始蒸';
+        return s.status == StepStatus.done ? '我关火了' : '我开始蒸了';
       case StepType.simmering:
         return '揭锅';
       case StepType.uncover:
         return '揭锅';
       case StepType.flipping:
-        return '已翻面';
+        return '我翻面了';
       case StepType.plateOut:
-        return '已出锅';
+        return '我出锅了';
     }
   }
 
@@ -702,11 +808,16 @@ class _BatchCardState extends State<BatchCard>
   }
 
   // ── 微调按钮 ──
-  Widget _adjustBtn(ZephyrSemantic z, String label, int delta) {
+  /// parallel=true 时调用 onAdjustParallelDuration（调烧水），否则调 onAdjustDuration（调当前步骤）
+  Widget _adjustBtn(ZephyrSemantic z, String label, int delta, {bool parallel = false}) {
     return GestureDetector(
       onTap: () {
         HapticFeedback.lightImpact();
-        widget.onAdjustDuration?.call(delta);
+        if (parallel) {
+          widget.onAdjustParallelDuration?.call(delta);
+        } else {
+          widget.onAdjustDuration?.call(delta);
+        }
       },
       child: Container(
         width: 44,
@@ -717,7 +828,7 @@ class _BatchCardState extends State<BatchCard>
           border: Border.all(color: z.borderSubtle),
         ),
         child: Center(
-          child: Text(label, style: TextStyle(fontSize: ZephyrFontSize.lg, fontWeight: FontWeight.w700, color: z.textPrimary)),
+          child: Text(label, style: TextStyle(fontSize: ZephyrFontSize.sm, fontWeight: FontWeight.w700, color: z.textPrimary)),
         ),
       ),
     );
@@ -772,9 +883,12 @@ class _BatchCardState extends State<BatchCard>
     final savedLabels = await PositionLabelStore.instance.loadLabels();
     final controller = TextEditingController(text: widget.batch.positionLabel ?? '');
 
-    if (!mounted) return;
+    if (!mounted) {
+      controller.dispose();
+      return;
+    }
 
-    showModalBottomSheet(
+    await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: z.bgElevated,
@@ -864,11 +978,9 @@ class _BatchCardState extends State<BatchCard>
                     ),
                   const Spacer(),
                   ElevatedButton(
+                    // 🟢7: 空文本点「确定」也生效 — 传入 trim 后的文本（空=清除标签）
                     onPressed: () {
-                      final text = controller.text.trim();
-                      if (text.isNotEmpty) {
-                        widget.onSetPositionLabel?.call(text);
-                      }
+                      widget.onSetPositionLabel?.call(controller.text.trim());
                       Navigator.pop(ctx);
                     },
                     style: ElevatedButton.styleFrom(
@@ -884,9 +996,9 @@ class _BatchCardState extends State<BatchCard>
         ),
       ),
     );
+    // 🟢7: bottom sheet 关闭后释放 controller，防止内存泄漏
+    controller.dispose();
   }
-
-  // ── 颜色 ──
   /// 收官金 — 完成态与最终按钮的成就色（替代原 success 绿，避免「大绿按钮」观感）
   Color _gold(ZephyrSemantic z) =>
       z.isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706);

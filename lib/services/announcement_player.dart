@@ -33,11 +33,12 @@ class AnnouncementCatalog {
     AnnouncementItem(text: '6号', audioAsset: 'number_6.wav'),
   ];
 
-  /// 品种段（4条）
+  /// 品种段
   static const varieties = [
     AnnouncementItem(text: '白馒头', audioAsset: 'variety_white_bun.wav'),
     AnnouncementItem(text: '甜馒头', audioAsset: 'variety_sweet_bun.wav'),
     AnnouncementItem(text: '小馒头', audioAsset: 'variety_small_bun.wav'),
+    AnnouncementItem(text: '包子', audioAsset: 'variety_baozi.wav'),
     AnnouncementItem(text: '饼子', audioAsset: 'variety_flatbread.wav'),
   ];
 
@@ -58,7 +59,11 @@ class AnnouncementCatalog {
       'white_bun': varieties[0],
       'sweet_bun': varieties[1],
       'small_bun': varieties[2],
-      'flatbread': varieties[3],
+      'baozi': varieties[3],
+      // 饼子类共用同一条录音
+      'flatbread': varieties[4],
+      'white_flatbread': varieties[4],
+      'brown_sugar_flatbread': varieties[4],
     };
     return map[recipeId];
   }

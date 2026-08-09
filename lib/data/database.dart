@@ -45,6 +45,9 @@ class BatchRecords extends Table {
   RealColumn get temperature => real().nullable()();
   IntColumn get humidity => integer().nullable()();
 
+  // ── 天气数据来源："gps" / "ip" / null(未获取) ──
+  TextColumn get weatherSource => text().nullable()();
+
   // ── 日期/季节 ──
   DateTimeColumn get createdAt => dateTime()();
   TextColumn get season => text()();
@@ -107,7 +110,7 @@ class AppDatabase extends _$AppDatabase {
   factory AppDatabase() => instance;
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -123,6 +126,16 @@ class AppDatabase extends _$AppDatabase {
         await customStatement(
           'CREATE TABLE IF NOT EXISTS active_batch_kv (id TEXT PRIMARY KEY, data TEXT NOT NULL)',
         );
+      }
+      if (from < 3) {
+        // v3: 新增 weather_source 列（记录天气来源 gps/ip）
+        try {
+          await customStatement(
+            'ALTER TABLE batch_records ADD COLUMN weather_source TEXT',
+          );
+        } catch (_) {
+          // 列已存在则跳过
+        }
       }
     },
   );
@@ -147,7 +160,7 @@ class AppDatabase extends _$AppDatabase {
     // CSV 表头
     buffer.writeln(
       '批次编号,品种,开始发酵,确认发酵,开始烧水,确认烧水,开始蒸,确认蒸,开始焖,揭锅,'
-      '发酵实际时长(分钟),评价结果,低置信度,焖制间隔(分钟),气温(°C),湿度(%),'
+      '发酵实际时长(分钟),评价结果,低置信度,焖制间隔(分钟),气温(°C),湿度(%),天气来源,'
       '日期,季节,微调幅度(分钟),状态,位置标签,烧水提醒延迟(秒),蒸制提醒延迟(秒),续时记录',
     );
 
@@ -169,6 +182,7 @@ class AppDatabase extends _$AppDatabase {
         r.simmeringIntervalMinutes ?? '',
         r.temperature ?? '',
         r.humidity ?? '',
+        r.weatherSource ?? '',
         r.createdAt.toIso8601String(),
         _csvEscape(r.season),
         r.adjustmentMinutes,

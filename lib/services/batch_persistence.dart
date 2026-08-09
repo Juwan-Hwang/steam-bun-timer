@@ -72,22 +72,22 @@ class ActiveBatchStorage {
       'completedAt': batch.completedAt?.toIso8601String(),
       'temperature': batch.temperature,
       'humidity': batch.humidity,
+      'weatherSource': batch.weatherSource,
       'adjustmentMinutes': batch.adjustmentMinutes,
       'positionLabel': batch.positionLabel,
       'fermentationResult': batch.fermentationResult?.name,
       'simmeringEnd': batch.simmeringEnd?.toIso8601String(),
       'parallelStepType': batch.parallelStep?.node.type.name,
       'parallelStepIsRunning': batch.parallelStep?.isParallelRunning,
+      'weatherRetryAt': batch.weatherRetryAt?.toIso8601String(),
       'steps': batch.steps.map(_stepToJson).toList(),
     };
   }
 
   Batch _batchFromJson(String id, Map<String, dynamic> j) {
     final recipeId = j['recipeId'] as String? ?? 'white_bun';
-    final recipe = Recipe.presets.firstWhere(
-      (r) => r.id == recipeId,
-      orElse: () => Recipe.presets.first,
-    );
+    // findById 兼容已废弃的 flatbread ID
+    final recipe = Recipe.findById(recipeId) ?? Recipe.presets.first;
 
     final stepsJson = j['steps'] as List<dynamic>;
     final steps = stepsJson.map((s) => _stepFromJson(s as Map<String, dynamic>, recipe)).toList();
@@ -120,11 +120,13 @@ class ActiveBatchStorage {
       completedAt: _parseDate(j['completedAt']),
       temperature: (j['temperature'] as num?)?.toDouble(),
       humidity: j['humidity'] as int?,
+      weatherSource: j['weatherSource'] as String?,
       adjustmentMinutes: j['adjustmentMinutes'] as int? ?? 0,
       positionLabel: j['positionLabel'] as String?,
       fermentationResult: _parseFermentationResult(j['fermentationResult']),
       simmeringEnd: _parseDate(j['simmeringEnd']),
       parallelStep: parallelStep,
+      weatherRetryAt: _parseDate(j['weatherRetryAt']),
       steps: steps,
     );
   }
